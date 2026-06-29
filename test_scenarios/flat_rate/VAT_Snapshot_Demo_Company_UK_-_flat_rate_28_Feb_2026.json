@@ -1,0 +1,20 @@
+{
+  "client_name": "Demo Company (UK) - flat_rate",
+  "period_start": "01 Dec 2025",
+  "period_end": "28 Feb 2026",
+  "vat_scheme": "Flat Rate",
+  "opening_vat_balance": 0.0,
+  "box1": 2967.23,
+  "box2": 0.0,
+  "box3": 2967.23,
+  "box4": 0.0,
+  "box5": 2967.23,
+  "box6": 14986.0,
+  "box7": 6559.0,
+  "box8": 1995.0,
+  "box9": 0.0,
+  "hmrc_total": 0.0,
+  "vat_control_tb": -244.34,
+  "closing_vat_balance": 2967.23,
+  "vat_control_diff": 3211.57
+}
