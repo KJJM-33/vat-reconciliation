@@ -11,7 +11,7 @@ stacks Q1–Q4 snapshots into a full-year reconciliation.
 ## Quick Start
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+streamlit run app.py --server.port 8506
 ```
 Then upload the matching Xero exports in the app (sample set in `demo_files/`).
 
