@@ -25,6 +25,8 @@ SCENARIOS = [
     "accrual",
     "large_numbers",
     "vat_repayment",
+    "credit_note_heavy",
+    "missing_vat_return",
     "dormant",
     "minimal_files",
 ]

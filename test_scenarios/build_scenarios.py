@@ -160,6 +160,35 @@ def scenario_vat_repayment():
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Scenario 4b: Credit-note-heavy quarter -- Box 1 (output VAT) goes
+#   negative because credit notes issued in the period exceed VAT on
+#   sales. A legitimate UK VAT position (HMRC allows negative boxes),
+#   not an error case -- checks the engine handles a negative Box1/Box3
+#   without crashing or mis-signing the VAT proof / control diffs.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_credit_note_heavy():
+    out = _copy_base("credit_note_heavy")
+    wb = _load(out, "vat_return")
+    ws = wb["VAT Return"]
+    ws["C15"] = -300.00    # Box 1 (output VAT, net of credit notes -> negative)
+    ws["C17"] = -300.00    # Box 3 = Box1 + Box2(0)
+    ws["C18"] = 200.00     # Box 4 (input VAT)
+    ws["C19"] = -500.00    # Box 5 = Box3 - Box4
+    wb.save(out / FILES["vat_return"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 4c: Missing required file -- VAT Return itself is absent.
+#   InputValidator must flag this as an error (not just a warning) and
+#   VATWorkflowService.run_job must raise InputError cleanly rather than
+#   crash with a file-not-found traceback.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_missing_vat_return():
+    out = _copy_base("missing_vat_return")
+    (out / FILES["vat_return"]).unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Scenario 5: Dormant / zero-activity quarter -- every VAT box, TB nominal
 #   and aged report figure is zero. Checks the engine handles all-zero
 #   inputs without div/0 or KeyErrors.
@@ -223,6 +252,8 @@ if __name__ == "__main__":
         scenario_accrual,
         scenario_large_numbers,
         scenario_vat_repayment,
+        scenario_credit_note_heavy,
+        scenario_missing_vat_return,
         scenario_dormant,
         scenario_minimal_files,
     ]
