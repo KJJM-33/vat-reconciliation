@@ -29,6 +29,8 @@ SCENARIOS = [
     "missing_vat_return",
     "dormant",
     "minimal_files",
+    "empty_trial_balance",
+    "control_diff_at_tolerance",
 ]
 
 
@@ -52,6 +54,17 @@ def run(name: str) -> bool:
         print(f"     box1={s['box1']} box4={s['box4']} box5={s['box5']} box6={s['box6']}")
         print(f"     vat_proof_diff={s['vat_proof_diff']} vat_control_diff={s['vat_control_diff']} box6_diff={s['box6_diff']}")
         print(f"     workbook={s['workbook']}")
+
+        if name == "control_diff_at_tolerance":
+            # Fixture is built so the reconstructed VAT control balance sits
+            # exactly £1.00 (cfg.tol_general) away from the TB figure --
+            # confirms the real pipeline's rounding doesn't nudge a
+            # boundary case off of what _flag() considers "reconciled".
+            diff = s["vat_control_diff"]
+            assert abs(abs(diff) - 1.00) < 1e-9, (
+                f"expected vat_control_diff to land exactly at £1.00 boundary, got {diff}"
+            )
+
         return True
     except (InputError, ParseError) as e:
         print(f"\n  >> {name}: HANDLED ERROR — {e}")

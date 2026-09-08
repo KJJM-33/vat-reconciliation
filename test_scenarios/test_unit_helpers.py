@@ -21,6 +21,8 @@ sys.path.insert(0, str(HERE.parent))
 from vat_engine import (  # noqa: E402
     JobConfig,
     InputValidator,
+    VATWorkflowService,
+    InputError,
     _flag,
     _safe_float,
     _norm_date,
@@ -144,6 +146,54 @@ def test_validator_date_mismatch_is_warning_not_error():
         check("validator: date mismatch severity is warning", date_warnings[0].severity, "warning")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# InputValidator + ParseManager: a *required* file left unconfigured
+# (attr is None, as opposed to configured-but-missing-on-disk above) is
+# currently reported as "info" by InputValidator -- same severity as a
+# genuinely optional file -- because _FILE_SPEC doesn't distinguish
+# required vs. optional files by name, only by whether cfg.<attr> was set
+# at all. validation.passed therefore stays True, and it's ParseManager
+# that ultimately blocks the job with a clean InputError. This pins down
+# that the two layers together still fail safely (no crash, no silent
+# wrong output) even though the pre-flight validation message alone would
+# undersell the problem. See HOLIDAY_LOG.md for the full note.
+# ─────────────────────────────────────────────────────────────────────────
+def test_validator_unconfigured_required_file_is_info_not_error():
+    cfg = JobConfig(
+        working_dir=str(DEMO),
+        vat_return_file="Demo-Company-UK-VAT-Return.xlsx",
+        trial_balance_file=None,
+        balance_sheet_file="Demo_Company__UK__-_Balance_Sheet.xlsx",
+        account_txn_file=None,
+        aged_pay_file=None,
+        aged_rec_file=None,
+    )
+    result = InputValidator().validate(cfg)
+    check("validator: unconfigured required file (None) still passes validation", result.passed, True)
+    tb_warnings = [w for w in result.warnings if "Trial Balance" in w.message]
+    check("validator: unconfigured required file severity is info", tb_warnings[0].severity if tb_warnings else None, "info")
+
+
+def test_parse_manager_blocks_unconfigured_required_file():
+    cfg = JobConfig(
+        working_dir=str(DEMO),
+        vat_return_file="Demo-Company-UK-VAT-Return.xlsx",
+        trial_balance_file=None,
+        balance_sheet_file="Demo_Company__UK__-_Balance_Sheet.xlsx",
+        account_txn_file=None,
+        aged_pay_file=None,
+        aged_rec_file=None,
+    )
+    try:
+        VATWorkflowService().run_job(cfg)
+        check("workflow: unconfigured Trial Balance raises InputError", "no exception raised", "InputError")
+    except InputError as e:
+        check("workflow: unconfigured Trial Balance raises InputError", "InputError", "InputError")
+        check("workflow: InputError message names the missing file", "Trial Balance" in str(e), True)
+    except Exception as e:  # pragma: no cover
+        check("workflow: unconfigured Trial Balance raises InputError", f"{type(e).__name__}: {e}", "InputError")
+
+
 if __name__ == "__main__":
     test_flag_tolerance_boundary()
     test_safe_float()
@@ -151,6 +201,8 @@ if __name__ == "__main__":
     test_validator_missing_optional_file_is_info_not_error()
     test_validator_missing_required_file_is_error()
     test_validator_date_mismatch_is_warning_not_error()
+    test_validator_unconfigured_required_file_is_info_not_error()
+    test_parse_manager_blocks_unconfigured_required_file()
 
     print("\n" + "=" * 60)
     if failures:

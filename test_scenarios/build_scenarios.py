@@ -153,7 +153,7 @@ def scenario_vat_repayment():
     wb = _load(out, "trial_balance")
     ws = wb["Trial Balance"]
     for row in ws.iter_rows(min_row=6):
-        if row[0].value == 820:
+        if str(row[0].value) == "820":  # Account Code is stored as text in Xero exports
             row[3].value = 0       # Debit
             row[4].value = 1000    # Credit -> Cr-Dr = +1000 (asset/repayment owed)
     wb.save(out / FILES["trial_balance"])
@@ -246,6 +246,45 @@ def scenario_minimal_files():
         (out / FILES[key]).unlink()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 7: Genuinely empty Trial Balance -- header row present but zero
+#   account-code data rows (distinct from `dormant`, which keeps every TB
+#   row but zeroes its values). VAT Return keeps real, non-zero figures.
+#   Checks that every TB nominal lookup (_tb_balance -> VAT control, Box 6
+#   sales/other-income, aged-report BS ties) degrades to 0.0 rather than
+#   raising KeyError/IndexError when the account code simply isn't present.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_empty_trial_balance():
+    out = _copy_base("empty_trial_balance")
+    wb = _load(out, "trial_balance")
+    ws = wb["Trial Balance"]
+    max_row = ws.max_row  # includes the trailing "Total" formula row
+    if max_row > 6:
+        ws.delete_rows(6, max_row - 6)  # keep header (row 5) + Total row only
+    wb.save(out / FILES["trial_balance"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 8: VAT control diff landing exactly on the tolerance boundary
+#   (cfg.tol_general = £1.00), using real Xero-shaped figures rather than
+#   a synthetic unit-test value. With the base demo VAT Return unmodified
+#   (Box1=2598.24, Box4=1279.31, no HMRC payments in Account Txns), the
+#   reconstructed control balance is 1318.93. Setting TB nominal 820 to
+#   1317.93 makes vat_control_diff = 1318.93 - 1317.93 = 1.00 exactly --
+#   `_flag()` treats abs(diff) <= tol as green, so this should reconcile
+#   clean end-to-end (not just in the isolated _flag() unit check).
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_control_diff_at_tolerance():
+    out = _copy_base("control_diff_at_tolerance")
+    wb = _load(out, "trial_balance")
+    ws = wb["Trial Balance"]
+    for row in ws.iter_rows(min_row=6):
+        if str(row[0].value) == "820":  # Account Code is stored as text in Xero exports
+            row[3].value = 0         # Debit
+            row[4].value = 1317.93   # Credit -> Cr-Dr = 1317.93
+    wb.save(out / FILES["trial_balance"])
+
+
 if __name__ == "__main__":
     scenarios = [
         scenario_flat_rate,
@@ -256,6 +295,8 @@ if __name__ == "__main__":
         scenario_missing_vat_return,
         scenario_dormant,
         scenario_minimal_files,
+        scenario_empty_trial_balance,
+        scenario_control_diff_at_tolerance,
     ]
     for fn in scenarios:
         fn()
