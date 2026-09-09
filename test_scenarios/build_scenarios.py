@@ -178,6 +178,27 @@ def scenario_credit_note_heavy():
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Scenario 4d: Negative Box 4 -- input VAT (VAT reclaimed on purchases)
+#   goes negative because purchase credit notes / returns in the period
+#   exceed VAT incurred on purchases. A legitimate UK VAT position
+#   (distinct from `vat_repayment`, where Box4 > Box1 but Box4 itself is
+#   still a plausible positive number, and from `credit_note_heavy`,
+#   which drives Box1 negative on the sales side) -- checks the engine
+#   handles a negative Box4 (and the resulting Box3-Box4 arithmetic in
+#   Box5 and the VAT control reconstruction) without mis-signing anything.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_negative_box4():
+    out = _copy_base("negative_box4")
+    wb = _load(out, "vat_return")
+    ws = wb["VAT Return"]
+    ws["C15"] = 2598.24    # Box 1 (output VAT, unchanged from base)
+    ws["C17"] = 2598.24    # Box 3 = Box1 + Box2(0)
+    ws["C18"] = -150.00    # Box 4 (input VAT, net negative from purchase credit notes)
+    ws["C19"] = 2748.24    # Box 5 = Box3 - Box4 = 2598.24 - (-150.00)
+    wb.save(out / FILES["vat_return"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Scenario 4c: Missing required file -- VAT Return itself is absent.
 #   InputValidator must flag this as an error (not just a warning) and
 #   VATWorkflowService.run_job must raise InputError cleanly rather than
@@ -292,6 +313,7 @@ if __name__ == "__main__":
         scenario_large_numbers,
         scenario_vat_repayment,
         scenario_credit_note_heavy,
+        scenario_negative_box4,
         scenario_missing_vat_return,
         scenario_dormant,
         scenario_minimal_files,

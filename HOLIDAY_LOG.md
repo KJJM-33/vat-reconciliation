@@ -8,10 +8,10 @@ completed work. Branch: `claude/holiday-hardening`.
 
 | Item | Status |
 |---|---|
-| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08) — no failures found |
-| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08) — see below for what's covered / still open |
+| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09) — no failures found |
+| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08, 2026-09-09) — see below for what's covered / still open |
 | 3. Respect CLAUDE.md Do-Not list | Followed for all code changes. **Found (not fixed) a Do-Not violation in app.py — see open questions below.** |
-| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py` — see below |
+| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py`. No new bugs found with high confidence in Session 3 — see below |
 
 ## Open questions for Keyaan (do not act on these without his input)
 
@@ -263,5 +263,124 @@ snapshot/workbook (the bug-fix), and the two new scenario directories.
   exists in app.py, not vat_engine.py.
 - No pytest-style tests still; left as-is per Session 1's reasoning
   (avoid an unrequested refactor of the existing test style).
+
+**Commits this session:** see git log on `claude/holiday-hardening`.
+
+---
+
+## Session 3 — 2026-09-09 (Tuesday)
+
+**Starting state:** picked up `claude/holiday-hardening` from Session 2
+(commit `5a08b58`). Installed `requirements.txt` fresh (this container had
+no packages installed) before running anything.
+
+**Ran (all green, no genuine failures — item 1):**
+- `test_scenarios/run_scenarios.py` — all 10 existing scenarios pass.
+- `test_scenarios/test_unit_helpers.py` — all 24 existing checks pass.
+- `test_scenarios/test_annual_summary.py` — still OK.
+- Confirmed (again) no pytest-style tests exist anywhere in the repo
+  (`pytest` isn't even installed) — same conclusion as Sessions 1-2,
+  left as-is.
+
+**Closed both of Session 2's "still open" items (item 2 — edge-case
+coverage):**
+
+1. **Negative Box 4 in isolation.** Added
+   `test_scenarios/negative_box4/` (new fixture + scenario, wired into
+   `run_scenarios.py`) — Box1=2598.24 unchanged, Box4=-150.00 (net input
+   VAT negative, e.g. purchase credit notes/returns in the period
+   exceeding VAT incurred on purchases — a legitimate UK VAT position),
+   Box3=2598.24, Box5=2748.24 (=Box3-Box4). Distinct from
+   `vat_repayment` (Box4 > Box1 but Box4 itself still positive) and
+   `credit_note_heavy` (Box1 negative, not Box4). Confirms end-to-end
+   the engine doesn't mis-sign `_vat_control`'s
+   `opening + box1 - box4 - hmrc_total` arithmetic or crash when Box4
+   itself is negative — ran clean (box4=-150.0, box5=2748.24 as
+   expected, no crash).
+
+2. **`AnnualSummaryBuilder` quarter-stacking edge cases.** Added
+   `test_scenarios/test_annual_summary_edge_cases.py` — 7 checks built
+   directly against hand-crafted `QuarterSnapshot` objects (fast, no
+   need to reparse Xero files) plus the FY workbook's own
+   `_note()`-written continuity-flag cells (VAT CONTROL ROLL-FORWARD
+   table, col 10), not the app.py version:
+   - Continuity tolerance boundary is inclusive: opening balance exactly
+     £1.00 off the prior quarter's closing → **not** flagged; £1.01 off
+     → flagged. Confirms `AnnualSummaryBuilder`'s own
+     `abs(q.opening_vat_balance - prev_closing) > 1.00` check (this
+     exists independently of the app.py duplicate logged below) matches
+     `_flag()`'s `<=` convention used everywhere else in the workbook.
+   - Break flagged in both directions (opening > prior close as well as
+     opening < prior close) — confirms `abs()` is used, not a signed
+     comparison.
+   - 4 consecutive quarters with correct carry-forward → zero
+     continuity notes anywhere (no false positives).
+   - **Missing quarter in the middle** (e.g. only Q1 and real-Q3
+     snapshots passed, Q2 never uploaded): `AnnualSummaryBuilder` has no
+     concept of calendar quarters — it labels rows "Q1", "Q2", ... by
+     **list position only**, so the real Q3 snapshot renders under the
+     label "Q2". The continuity check still does its numeric job (the
+     real gap between Q1's closing and Q3's opening balance is caught
+     and flagged), just under a misleading row label. **Not changed** —
+     documented and pinned down with a test rather than "fixed", because
+     it's ambiguous whether calendar-quarter validation belongs in this
+     builder at all (it takes whatever `QuarterSnapshot` list the caller
+     hands it; the caller — app.py's Annual Summary tab — is presumably
+     meant to be the one responsible for feeding it contiguous quarters
+     in order) or whether an assumption like "index 0 is always Q1" is
+     even meant to hold. Same reasoning as Session 1-2's other
+     "pin down with a test, don't guess a fix" open items. Added to open
+     questions below.
+   - Single-quarter FY and empty quarters list both build without
+     crashing.
+   - Run: `python test_scenarios/test_annual_summary_edge_cases.py`.
+     Probe workbooks are written to a `tempfile.mkdtemp()` dir, not
+     under `test_scenarios/`, since they're pure assertion scaffolding
+     with no review value of their own (unlike the scenario fixtures,
+     which double as sample output for a human to eyeball) — avoids
+     adding meaningless committed `.xlsx` files to the repo.
+
+**No new low-risk bugs found this session (item 4).** Read through
+`_vat_control`, `_top10_box4`, and `AnnualSummaryBuilder._build_wb` while
+building the above two items; nothing else looked wrong with high
+confidence.
+
+**Note on regenerated fixtures (same caveat as Sessions 1-2, still
+holds):** every `build_scenarios.py`/`run_scenarios.py` run rewrites
+zip-internal metadata on every scenario's `.xlsx`, including ones this
+session didn't touch. Did `git status` + `git checkout --` after every
+run this session, same as before — final diff limited to
+`build_scenarios.py`, `run_scenarios.py`, the new
+`negative_box4/` fixture directory, and the new
+`test_annual_summary_edge_cases.py` file.
+
+**New item for "Open questions for Keyaan" (see section above — added
+there, not a separate list):**
+- `AnnualSummaryBuilder` labels VAT-control-roll-forward rows "Q1",
+  "Q2", ... by list position, not by any calendar-quarter identifier on
+  `QuarterSnapshot` itself (there isn't one — only `period_end`, a free
+  string). If a quarter is skipped when uploading snapshots in the
+  Streamlit Annual Summary tab, every subsequent row is mislabelled
+  (off by one) even though the underlying £-value continuity check still
+  fires correctly on the real gap. Locked in behaviour with a test
+  (`test_annual_summary_edge_cases.py`, "missing quarter in the middle")
+  rather than changing it — not clear whether it's in scope for
+  `AnnualSummaryBuilder` to validate `period_end`s are consecutive
+  calendar quarters (would need real date parsing of period_end, which
+  is a free-text field, not guaranteed parseable) versus that being
+  app.py's job as the upload UI, which is exactly the kind of "which
+  layer should own this" question already flagged for Keyaan above.
+
+**Still open for next session:**
+- The three "Open questions for Keyaan" above — still need his input,
+  don't act without it. Nothing this session changed their status.
+- Session 2's other still-open items are now closed (see above); no new
+  concrete gaps identified this session beyond what's logged as open
+  questions. Worth a fresh look next session at `WorkbookBuilder`'s
+  Excel-formatting/formula edge cases (untouched by any session so far —
+  all prior + this session's work has been on parsing/reconciliation/
+  annual-summary logic, not the workbook rendering layer itself) if
+  nothing else stands out.
+- No pytest-style tests still; left as-is per Session 1's reasoning.
 
 **Commits this session:** see git log on `claude/holiday-hardening`.
