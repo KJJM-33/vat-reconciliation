@@ -8,10 +8,10 @@ completed work. Branch: `claude/holiday-hardening`.
 
 | Item | Status |
 |---|---|
-| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09) — no failures found |
-| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08, 2026-09-09) — see below for what's covered / still open |
+| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13) — no failures found |
+| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08, 2026-09-09, 2026-09-13) — see below for what's covered / still open |
 | 3. Respect CLAUDE.md Do-Not list | Followed for all code changes. **Found (not fixed) a Do-Not violation in app.py — see open questions below.** |
-| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py`. No new bugs found with high confidence in Session 3 — see below |
+| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py`. No new bugs found with high confidence in Sessions 3-4 — see below |
 
 ## Open questions for Keyaan (do not act on these without his input)
 
@@ -56,6 +56,22 @@ completed work. Branch: `claude/holiday-hardening`.
   something different from "file missing" in some caller's mental model)
   and I wasn't confident enough to change validation-layer behaviour
   without checking with Keyaan first.
+- **`WorkbookBuilder._sheet_file_register`'s "Match?" column flags an
+  *unconfigured optional* file (e.g. no Account Transactions uploaded)
+  with the same red ✗ as a file that's present but has the wrong period
+  date on it.** Found and pinned down with a test
+  (`test_workbook_builder.py`,
+  `test_file_register_match_column`) on 2026-09-13. The code
+  (`vat_engine.py`, `_sheet_file_register`) doesn't distinguish "not
+  configured" from "configured but date mismatch" — both end up with
+  `d = validation.file_dates.get(label, "—")` failing to equal the
+  expected QE date, so both render red. This lives in `vat_engine.py`
+  itself (not app.py), so it's in scope for this hardening work in
+  principle, but changing it means deciding what an unconfigured-optional
+  row *should* show instead (grey/neutral? blank? skip the column
+  entirely?) — a genuine judgement call about what the working paper
+  should communicate to a reviewer, not a mechanical fix. Left for
+  Keyaan's call rather than guessing.
 
 ---
 
@@ -381,6 +397,109 @@ there, not a separate list):**
   all prior + this session's work has been on parsing/reconciliation/
   annual-summary logic, not the workbook rendering layer itself) if
   nothing else stands out.
+- No pytest-style tests still; left as-is per Session 1's reasoning.
+
+**Commits this session:** see git log on `claude/holiday-hardening`.
+
+---
+
+## Session 4 — 2026-09-13 (Saturday)
+
+**Starting state:** picked up `claude/holiday-hardening` from Session 3
+(commit `c13d6b3`). `pip install -r requirements.txt` fresh (this
+container had no packages installed).
+
+**Ran (all green, no genuine failures — item 1):**
+- `test_scenarios/run_scenarios.py` — all 11 existing scenarios pass.
+- `test_scenarios/test_unit_helpers.py` — all checks pass.
+- `test_scenarios/test_annual_summary.py` — still OK.
+- `test_scenarios/test_annual_summary_edge_cases.py` — all 7 checks pass.
+- `pytest` still not installed / no pytest-style tests anywhere — same
+  conclusion as every prior session, left as-is.
+
+**Took up Session 3's suggested next focus — `WorkbookBuilder`'s
+Excel-formatting/formula edge cases, untouched by any session so far
+(item 2).** Read through the whole class (`vat_engine.py` ~880-1352):
+sheet-by-sheet cell/column mapping (file register, VAT return, txn-by-box,
+VAT control, bank rec, box 6 rec, aged payables/receivables, trial
+balance, top 10 box 4, checklist) plus the shared helpers (`_hdr`, `_cel`,
+`_flag`, `_note`, `_write_txns`). Checked the aged-payables/receivables
+column-index arithmetic in particular (different header-column counts
+between the two sheets) by hand against `data.aged_pay_raw`/
+`aged_rec_raw`'s actual column layout — lines up correctly on both, no
+off-by-one. Also re-confirmed `TrialBalanceParser` already guarantees
+`Account Code` is a clean non-null `int` column before
+`_sheet_trial_balance` does `int(row["Account Code"])` on it (relevant
+after Session 2's fixture-generator bug in this exact area) — safe.
+
+**Added `test_scenarios/test_workbook_builder.py`** — new file, same
+"synthetic dataclasses, no Xero fixture needed" approach Session 3 used
+for `test_annual_summary_edge_cases.py`, applied to `WorkbookBuilder` for
+the first time. Calls the private `_sheet_*` methods directly against
+hand-built `JobConfig`/`ParsedData`/`ReconciliationResults` objects and
+asserts on the actual openpyxl cell fills/values written — this is
+genuinely new coverage, not a restatement of what `run_scenarios.py`
+already exercises end-to-end (that only checks the pipeline doesn't
+crash and the key figures are right; it doesn't assert on cell colours or
+which row gets highlighted). Checks added:
+- VAT Return sheet: Box 5 negative (repayment) → green cell; Box 5
+  positive (owe HMRC) → red cell.
+- Trial Balance sheet: the row matching `cfg.vat_control_nominal` is
+  highlighted blue across all 6 columns; a non-matching nominal isn't.
+- Aged Payables/Receivables: the BS-agreement diff cell is green when
+  within `_flag`'s tolerance and red when not (this needed
+  `ap_bs_diff`/`ar_bs_diff` set explicitly on the synthetic
+  `ReconciliationResults` — those fields aren't derived by the sheet
+  method itself, only displayed, so a naive "set totals and expect the
+  sheet to compute the diff" test would have silently tested nothing;
+  caught this while writing the test, not a runtime bug).
+- File Register: a file matching the expected QE date is green-ticked, a
+  present-but-mismatched-date file is red-crossed, and an unconfigured
+  optional file is *also* red-crossed — this last one is the open item
+  logged above, pinned down as current behaviour rather than changed.
+- VAT Checklist: all 20 items render with their reference codes, and the
+  preparer name is written into the header block.
+- Run: `python test_scenarios/test_workbook_builder.py`. Building the
+  fill-colour assertion helper surfaced one thing worth noting for anyone
+  extending this file: openpyxl reports an *unfilled* cell's
+  `fill.fgColor.rgb` as the string `'00000000'`, not `None` — you have to
+  check `fill.fill_type is None` first, or an "this cell should have no
+  background" assertion will silently pass by accident (matched a literal
+  `''` that dumping `.rgb` alone would never produce, so this would have
+  failed loudly, not silently — still worth documenting for the next
+  session touching this file).
+
+**New item for "Open questions for Keyaan"** (see section above): the
+File Register "Match?" red-flagging of unconfigured optional files,
+found while writing the test above. Not changed — see reasoning there.
+
+**No new low-risk bugs found this session (item 4)** beyond the File
+Register item above, which is a UX/design judgement call, not a
+mechanical bug (off-by-one, wrong rounding direction, etc.) — logged as
+an open question per the same reasoning as prior sessions' similar
+findings, not fixed unattended.
+
+**Note on regenerated fixtures (same caveat as every prior session):**
+running `run_scenarios.py`/`test_annual_summary.py` (and an ad-hoc probe
+script used while investigating fill colours, pointed at the
+`vat_repayment` scenario) rewrites zip-internal metadata on scenario
+`.xlsx` files even when no cell value changes. `git status` +
+`git checkout --` after every run this session — final diff is exactly
+the new `test_scenarios/test_workbook_builder.py` file and this log.
+
+**Still open for next session:**
+- The four "Open questions for Keyaan" above (app.py logic placement,
+  `InputValidator` required-file severity, `AnnualSummaryBuilder` Q-label
+  positional numbering, File Register unconfigured-file red-flag) — still
+  need Keyaan's input, don't act without it.
+- `WorkbookBuilder` now has direct test coverage for the sheets most
+  likely to hide a formatting bug (VAT Return colouring, TB highlight,
+  aged BS-agreement flags, file register, checklist). Not yet covered:
+  `_sheet_txn_by_box`, `_sheet_vat_control`'s HMRC-payments table
+  rendering, `_sheet_bank_rec`, `_sheet_box6_rec`'s proof-of-output-VAT
+  block, `_sheet_top10` — worth a look if nothing else stands out next
+  session, same "synthetic dataclasses" approach as this session's new
+  file.
 - No pytest-style tests still; left as-is per Session 1's reasoning.
 
 **Commits this session:** see git log on `claude/holiday-hardening`.
