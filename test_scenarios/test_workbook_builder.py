@@ -207,12 +207,181 @@ def test_checklist_all_items_rendered():
           ws.cell(row=7, column=2).value, "J. Smith")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 1B. Txns by VAT Box: per-box totals + only non-empty sub-sections render
+# ─────────────────────────────────────────────────────────────────────────
+def test_txn_by_box_writes_totals_and_skips_empty_subsections():
+    builder = WorkbookBuilder()
+    cfg = _cfg()
+    validation = ValidationResult()
+    b1_20 = pd.DataFrame([{"Date": "01/01/2026", "Account": "Sales", "Reference": "INV1",
+                            "Details": "Sale", "VAT": 500.0, "Net": 2500.0}])
+    b4_20 = pd.DataFrame([{"Date": "02/01/2026", "Account": "Expenses", "Reference": "BILL1",
+                            "Details": "Purchase", "VAT": 100.0, "Net": 500.0}])
+    data = ParsedData(
+        boxes=_boxes(box1=2598.24, box4=1279.31, box6=14986.0, box7=0.0),
+        txn_sections={
+            "Box 1|20% (VAT on Income)": b1_20,
+            "Box 4|20% (VAT on Expenses)": b4_20,
+        },
+    )
+    recs = ReconciliationResults()
+
+    wb = Workbook()
+    ws = wb.active
+    builder._sheet_txn_by_box(ws, cfg, validation, data, recs)
+
+    check("Txn by box: Box 1 total written", ws.cell(row=10, column=6).value, 2598.24)
+    check("Txn by box: Box 1 sub-header rendered", ws.cell(row=11, column=1).value,
+          "20% (VAT on Income)")
+    check("Txn by box: Box 1 transaction row written", ws.cell(row=13, column=3).value, "INV1")
+    check("Txn by box: Box 4 total written", ws.cell(row=16, column=6).value, 1279.31)
+    check("Txn by box: Box 4 transaction row written", ws.cell(row=19, column=3).value, "BILL1")
+    # Box 6 has no configured txn_sections entries -> no sub-header/txn rows,
+    # just the box-total banner row, before Box 7's banner follows immediately.
+    check("Txn by box: Box 6 total written with no sub-sections", ws.cell(row=22, column=6).value,
+          14986.0)
+    check("Txn by box: Box 7 total written (zero, no sub-sections)",
+          ws.cell(row=24, column=6).value, 0.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 2A. VAT Control: HMRC-payments table + closing reconciliation diff flag
+# ─────────────────────────────────────────────────────────────────────────
+def test_vat_control_hmrc_payments_table_and_diff_flag():
+    builder = WorkbookBuilder()
+    cfg = _cfg(opening_vat_balance=100.0, vat_control_nominal=820)
+    validation = ValidationResult()
+    data = ParsedData(boxes=_boxes(box1=2598.24, box4=1279.31, box5=1318.93))
+
+    hmrc_df = pd.DataFrame([{"Date": "15/02/2026", "Description": "HMRC VAT PAYMENT",
+                              "Debit": 1200.0, "Credit": 0.0}])
+    recs_ok = ReconciliationResults(hmrc_payments=hmrc_df, hmrc_total=1200.0,
+                                     vat_control_tb=1318.93, vat_control_diff=0.5)
+    wb = Workbook()
+    ws = wb.active
+    builder._sheet_vat_control(ws, cfg, validation, data, recs_ok)
+    check("VAT Control: HMRC payment row written", ws.cell(row=24, column=1).value, "15/02/2026")
+    check("VAT Control: HMRC payment description written",
+          ws.cell(row=24, column=2).value, "HMRC VAT PAYMENT")
+    check("VAT Control: HMRC payment amount written", ws.cell(row=24, column=3).value, 1200.0)
+    check("VAT Control: total HMRC payments written", ws.cell(row=26, column=3).value, 1200.0)
+    check("VAT Control: diff within tolerance is green", fg(ws.cell(row=31, column=3)), _GREEN)
+
+    recs_bad = ReconciliationResults(hmrc_payments=pd.DataFrame(), hmrc_total=0.0,
+                                      vat_control_tb=0.0, vat_control_diff=5000.0)
+    wb2 = Workbook()
+    ws2 = wb2.active
+    builder._sheet_vat_control(ws2, cfg, validation, data, recs_bad)
+    check("VAT Control: no HMRC payments shows italic placeholder message",
+          ws2.cell(row=24, column=2).value,
+          "No HMRC VAT payments identified in Account Transactions")
+    check("VAT Control: nominal-not-in-TB note shown when vat_control_tb is falsy",
+          ws2.cell(row=30, column=5).value,
+          "◄ Nominal 820 not in TB — enter manually")
+    check("VAT Control: diff outside tolerance is red", fg(ws2.cell(row=31, column=3)), _RED)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 2B. Bank Rec: balances carried through, difference cell always shaded
+# ─────────────────────────────────────────────────────────────────────────
+def test_bank_rec_balances_and_difference_shading():
+    builder = WorkbookBuilder()
+    cfg = _cfg()
+    validation = ValidationResult()
+    data = ParsedData(boxes=_boxes())
+    recs = ReconciliationResults(bs_bank=5000.0)
+
+    wb = Workbook()
+    ws = wb.active
+    builder._sheet_bank_rec(ws, cfg, validation, data, recs)
+
+    check("Bank Rec: Balance per TB", ws.cell(row=12, column=3).value, 5000.0)
+    check("Bank Rec: Balance per Statement", ws.cell(row=15, column=3).value, 5000.0)
+    check("Bank Rec: Difference value", ws.cell(row=16, column=3).value, 0.0)
+    check("Bank Rec: Difference row always shaded green", fg(ws.cell(row=16, column=3)), _GREEN)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 2C. Box 6 Rec: proof-of-output-VAT block (Box 6 x 20% ~= Box 1)
+# ─────────────────────────────────────────────────────────────────────────
+def test_box6_rec_proof_of_output_vat_block():
+    builder = WorkbookBuilder()
+    cfg = _cfg()
+    validation = ValidationResult()
+    data = ParsedData(boxes=_boxes(box1=2598.24, box6=14986.0))
+    recs = ReconciliationResults(box6_tb_sales=10000.0, box6_tb_other=0.0, box6_tb_total=10000.0,
+                                  box6_diff=4986.0, box6_zero_net=0.0, expected_output_vat=2997.2,
+                                  vat_proof_diff=398.96)
+
+    wb = Workbook()
+    ws = wb.active
+    builder._sheet_box6_rec(ws, cfg, validation, data, recs)
+
+    check("Box6 Rec: VATable sales after removing zero-rated", ws.cell(row=28, column=3).value,
+          14986.0)
+    check("Box6 Rec: expected output VAT (x20%)", ws.cell(row=29, column=3).value, 2997.2)
+    check("Box6 Rec: actual Box 1 shown for comparison", ws.cell(row=30, column=3).value, 2598.24)
+    check("Box6 Rec: proof diff value", ws.cell(row=31, column=3).value, 398.96)
+    check("Box6 Rec: proof diff outside default tolerance is red",
+          fg(ws.cell(row=31, column=3)), _RED)
+    check("Box6 Rec: QE-vs-YTD diff uses the wider tol_box6 tolerance (still red here)",
+          fg(ws.cell(row=22, column=3)), _RED)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 4A. Top 10 Box 4: rows + total. Note the `_vat` column contract below.
+# ─────────────────────────────────────────────────────────────────────────
+def test_top10_box4_rows_and_total():
+    # _sheet_top10 reads recs.top10_box4["_vat"] directly (see vat_engine.py
+    # _sheet_top10) -- that column only exists because
+    # ReconciliationEngine._top10_box4 adds it before slicing nlargest(). A
+    # ReconciliationResults built with a top10_box4 DataFrame that lacks
+    # "_vat" (e.g. hand-built like everywhere else in this test file) raises
+    # KeyError instead of silently doing something wrong -- confirmed while
+    # writing this test. Not a production bug (the real pipeline always
+    # populates both together) but the implicit contract is easy to trip
+    # over when constructing ReconciliationResults directly, so it's
+    # reproduced here deliberately rather than worked around.
+    builder = WorkbookBuilder()
+    cfg = _cfg()
+    validation = ValidationResult()
+    data = ParsedData(boxes=_boxes())
+
+    top10 = pd.DataFrame([
+        {"Date": "05/01/2026", "Account": "Equipment", "Reference": "INV100",
+         "Details": "Laptop", "VAT": 400.0, "Net": 2000.0, "_vat": 400.0},
+        {"Date": "06/01/2026", "Account": "Software", "Reference": "INV101",
+         "Details": "Licence", "VAT": 100.0, "Net": 500.0, "_vat": 100.0},
+    ])
+    recs = ReconciliationResults(top10_box4=top10)
+    wb = Workbook()
+    ws = wb.active
+    builder._sheet_top10(ws, cfg, validation, data, recs)
+
+    check("Top10: first row reference", ws.cell(row=10, column=3).value, "INV100")
+    check("Top10: second row VAT amount", ws.cell(row=11, column=5).value, 100.0)
+    check("Top10: total sums the VAT column", ws.cell(row=13, column=5).value, 500.0)
+
+    recs_empty = ReconciliationResults(top10_box4=pd.DataFrame())
+    wb2 = Workbook()
+    ws2 = wb2.active
+    builder._sheet_top10(ws2, cfg, validation, data, recs_empty)
+    check("Top10: empty top10_box4 renders zero total, no crash",
+          ws2.cell(row=11, column=5).value, 0.0)
+
+
 if __name__ == "__main__":
     test_box5_owed_is_red_repayment_is_green()
     test_trial_balance_vat_control_row_highlighted()
     test_aged_bs_agreement_flag_green_when_reconciled_red_when_not()
     test_file_register_match_column()
     test_checklist_all_items_rendered()
+    test_txn_by_box_writes_totals_and_skips_empty_subsections()
+    test_vat_control_hmrc_payments_table_and_diff_flag()
+    test_bank_rec_balances_and_difference_shading()
+    test_box6_rec_proof_of_output_vat_block()
+    test_top10_box4_rows_and_total()
 
     print("\n" + "=" * 60)
     if failures:

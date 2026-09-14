@@ -8,10 +8,10 @@ completed work. Branch: `claude/holiday-hardening`.
 
 | Item | Status |
 |---|---|
-| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13) — no failures found |
-| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08, 2026-09-09, 2026-09-13) — see below for what's covered / still open |
+| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14) — no failures found |
+| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14) — see below for what's covered / still open |
 | 3. Respect CLAUDE.md Do-Not list | Followed for all code changes. **Found (not fixed) a Do-Not violation in app.py — see open questions below.** |
-| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py`. No new bugs found with high confidence in Sessions 3-4 — see below |
+| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py`. No new bugs found with high confidence in Sessions 3-5 — see below |
 
 ## Open questions for Keyaan (do not act on these without his input)
 
@@ -405,6 +405,12 @@ there, not a separate list):**
 
 ## Session 4 — 2026-09-13 (Saturday)
 
+*(Note from Session 5: this file's weekday labels don't always match the
+actual calendar weekday for the stated date — e.g. 2026-09-13 is a Sunday,
+not a Saturday. Not corrected retroactively since it doesn't affect the
+content; just flagging in case a future session double-checks something
+by weekday instead of date.)*
+
 **Starting state:** picked up `claude/holiday-hardening` from Session 3
 (commit `c13d6b3`). `pip install -r requirements.txt` fresh (this
 container had no packages installed).
@@ -500,6 +506,144 @@ the new `test_scenarios/test_workbook_builder.py` file and this log.
   block, `_sheet_top10` — worth a look if nothing else stands out next
   session, same "synthetic dataclasses" approach as this session's new
   file.
+- No pytest-style tests still; left as-is per Session 1's reasoning.
+
+**Commits this session:** see git log on `claude/holiday-hardening`.
+
+---
+
+## Session 5 — 2026-09-14 (Monday)
+
+**Starting state:** picked up `claude/holiday-hardening` from Session 4
+(commit `8903537`). `pip install -r requirements.txt` fresh (this
+container had no packages installed).
+
+**Ran (all green, no genuine failures — item 1):**
+- `test_scenarios/run_scenarios.py` — all 11 existing scenarios pass.
+- `test_scenarios/test_unit_helpers.py` — all checks pass.
+- `test_scenarios/test_annual_summary.py` — still OK.
+- `test_scenarios/test_annual_summary_edge_cases.py` — all 7 checks pass.
+- `test_scenarios/test_workbook_builder.py` — all 15 pre-existing checks
+  pass (before this session's additions).
+- `pytest` still not installed / no pytest-style tests anywhere — same
+  conclusion as every prior session, left as-is.
+
+**Took up Session 4's suggested next focus — the remaining
+`WorkbookBuilder` sheets with no direct formatting/rendering coverage yet
+(item 2):** `_sheet_txn_by_box`, `_sheet_vat_control`'s HMRC-payments
+table, `_sheet_bank_rec`, `_sheet_box6_rec`'s proof-of-output-VAT block,
+and `_sheet_top10`. Introspected each method's actual row layout with
+synthetic `JobConfig`/`ParsedData`/`ReconciliationResults` objects (same
+approach as Session 4) before writing assertions, rather than guessing
+row numbers from reading the source.
+
+**Added to `test_scenarios/test_workbook_builder.py`** (5 new test
+functions, 24 new checks):
+- `test_txn_by_box_writes_totals_and_skips_empty_subsections` — Box 1/4
+  totals and transaction rows render correctly; confirmed Box 6/7 (no
+  configured `txn_sections` entries in the synthetic data) still render
+  their box-total banner row with no sub-header/transaction rows in
+  between — the `if df.empty: continue` guard in `_sheet_txn_by_box`
+  behaves as intended, not just "doesn't crash".
+- `test_vat_control_hmrc_payments_table_and_diff_flag` — HMRC payment
+  rows render (date/description/amount) when `recs.hmrc_payments` is
+  populated; the italic placeholder message renders when it's empty; the
+  "Nominal N not in TB — enter manually" note appears when
+  `vat_control_tb` is falsy; the closing-difference cell flags green/red
+  correctly either side of the £1 tolerance.
+- `test_bank_rec_balances_and_difference_shading` — TB/statement balances
+  both reflect `recs.bs_bank` (there's no independent statement figure
+  fed in — see note below); the difference row is always green-shaded
+  (it's hard-coded 0.0 with no computed reconciling items — see note
+  below).
+- `test_box6_rec_proof_of_output_vat_block` — the Box 6 × 20% ≈ Box 1
+  proof block (VATable sales after removing zero-rated, expected output
+  VAT, actual Box 1, and the flagged difference) renders and flags
+  correctly; also confirmed the QE-vs-YTD difference above it uses the
+  wider `cfg.tol_box6` (£5) tolerance rather than the general £1 one,
+  matching `_sheet_box6_rec`'s explicit `tol=cfg.tol_box6` argument.
+- `test_top10_box4_rows_and_total` — Top 10 Box 4 transaction rows and
+  the VAT-column total render correctly; empty `top10_box4` renders a
+  zero total without crashing.
+- Run: `python test_scenarios/test_workbook_builder.py` (now 39 checks
+  total, all passing).
+
+**Worth flagging for whoever next touches `_sheet_top10` (documented in
+the test itself, not changed — not a bug):** `_sheet_top10` reads
+`recs.top10_box4["_vat"]` directly. That column only exists because
+`ReconciliationEngine._top10_box4` adds it to the DataFrame before
+`nlargest()` — it's not part of `top10_box4`'s "public" shape (Date/
+Account/Reference/Details/VAT/Net, same as every other txn DataFrame in
+this codebase). The real pipeline always produces both together, so this
+isn't reachable as a bug in practice, but a `ReconciliationResults` built
+directly with a `top10_box4` DataFrame in the "normal" shape (as every
+other synthetic test in this file does for other fields) raises a bare
+`KeyError: '_vat'` instead of a clearer error — hit this firsthand while
+writing the test, before adding the `_vat` column deliberately to match
+what the engine actually produces.
+
+**No new "Open questions for Keyaan" this session** — nothing found while
+building this coverage looked like a genuine judgement call the way
+Sessions 2-4's items did; the `_vat`-column coupling above is an internal
+implementation detail, not something with a UI-visible or judgement-call
+dimension.
+
+**No new low-risk bugs found this session (item 4).** Read
+`InputValidator`, `VATReturnParser` (including its label-scan fallback),
+`TxnByBoxParser`, `TrialBalanceParser`, `AgedReportParser`,
+`AccountTxnParser`, and `ParseManager` end-to-end while looking for
+something to hand off to the workbook-layer work above; all degrade
+gracefully (missing header row → empty DataFrame, non-numeric Account
+Code → dropped, primary VAT-return cell read → label-scan fallback with
+an explicit skip-the-box-number-column comment already in place) and
+nothing looked wrong with high confidence. `ReconciliationEngine._top10_box4`
+picks `nlargest(10, "_vat")` on signed VAT values rather than by
+magnitude — so a large *negative* Box 4 line (a purchase credit note)
+would never surface in the "top 10 to check invoices for" list even
+though it's exactly the kind of unusual line worth checking. Not changed:
+plausible this is intentional (largest reclaims, not largest-magnitude
+adjustments), and Session 3's `negative_box4` scenario shows a negative
+Box 4 *total* is already a legitimate position the engine handles
+correctly elsewhere — whether the Top 10 list should rank by magnitude
+is a product judgement call, not a mechanical bug, so logging it here for
+awareness rather than as a fifth "Open question" (no real client data has
+surfaced this in practice, and it doesn't affect any figure that's relied
+on for reconciliation, only which rows get manually spot-checked).
+
+**Note on regenerated fixtures (same caveat as every prior session):**
+`run_scenarios.py`, `test_annual_summary.py`, and this session's ad-hoc
+row-layout introspection scripts (not committed — pure scratch, run
+outside the repo's normal test files) rewrite zip-internal metadata on
+scenario `.xlsx` files. `git status` + `git checkout --` on every touched
+fixture directory before committing — final diff is exactly
+`test_scenarios/test_workbook_builder.py` and this log.
+
+**Still open for next session:**
+- The four "Open questions for Keyaan" (app.py logic placement,
+  `InputValidator` required-file severity, `AnnualSummaryBuilder` Q-label
+  positional numbering, File Register unconfigured-file red-flag) — still
+  need Keyaan's input, don't act without it.
+- `WorkbookBuilder` now has direct coverage across every sheet method
+  (`_sheet_file_register`, `_sheet_vat_return`, `_sheet_txn_by_box`,
+  `_sheet_vat_control`, `_sheet_bank_rec`, `_sheet_box6_rec`,
+  `_sheet_aged_payables`/`_receivables`, `_sheet_trial_balance`,
+  `_sheet_top10`, `_sheet_checklist`) except the private helpers
+  (`_hdr`/`_cel`/`_flag`/`_note`/`_write_txns`/`_wp_header`/`_set_widths`)
+  which are exercised indirectly by every sheet test already and don't
+  seem to need direct unit tests of their own.
+- `_sheet_bank_rec` is worth a second look by a future session with more
+  context on the real bank-rec workflow: `recs.bs_bank` (a single TB
+  balance) is used for *both* "Balance per TB" and "Balance per
+  Statement", and "unreconciled items"/"outstanding payments"/
+  "Difference" are all hard-coded `0.0` — there's no actual bank
+  statement figure or reconciling-items source fed into
+  `ReconciliationResults` anywhere in the codebase. This might be
+  entirely intentional (a placeholder scaffold for the preparer to fill
+  in by hand in Excel, per the `_note` "Attach bank statement / Xero bank
+  rec screenshot" already on that sheet) rather than a gap — flagging
+  for awareness, not logging as an "open question" since nothing here
+  looks like unintentional/wrong behaviour, just a sheet that's
+  deliberately thinner than the others.
 - No pytest-style tests still; left as-is per Session 1's reasoning.
 
 **Commits this session:** see git log on `claude/holiday-hardening`.
