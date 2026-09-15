@@ -8,10 +8,10 @@ completed work. Branch: `claude/holiday-hardening`.
 
 | Item | Status |
 |---|---|
-| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14) — no failures found |
-| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14) — see below for what's covered / still open |
+| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15) — no failures found |
+| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15) — see below for what's covered / still open |
 | 3. Respect CLAUDE.md Do-Not list | Followed for all code changes. **Found (not fixed) a Do-Not violation in app.py — see open questions below.** |
-| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py`. No new bugs found with high confidence in Sessions 3-5 — see below |
+| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py`. No new bugs found with high confidence in Sessions 3-6 — see below |
 
 ## Open questions for Keyaan (do not act on these without his input)
 
@@ -72,6 +72,36 @@ completed work. Branch: `claude/holiday-hardening`.
   entirely?) — a genuine judgement call about what the working paper
   should communicate to a reviewer, not a mechanical fix. Left for
   Keyaan's call rather than guessing.
+- **`ReconciliationEngine._vat_control` never references Box 2** (VAT due
+  on acquisitions of goods made in Northern Ireland from EU member
+  states). Found by audit on 2026-09-15. The reconstructed VAT-control
+  closing balance is hard-coded as `opening + Box1 - Box4 - HMRC
+  payments` (`vat_engine.py` `_vat_control`, ~line 727) -- Box 2 is
+  parsed, displayed on the VAT Return sheet, and included in Box 3/Box 5
+  (which *are* Box1+Box2 and Box3-Box4 respectively on the actual
+  return), but the VAT control account reconciliation itself silently
+  ignores it. For a GB-only client Box 2 is always 0 so this is
+  invisible in practice; for an NI client with genuine EU goods
+  acquisitions it would mean the VAT control tab's diff doesn't reflect
+  a real Box 2 liability at all. Pinned down (not fixed) with a new
+  fixture, `test_scenarios/box2_ni_acquisitions/` (Box2=200, Box3/Box5
+  updated to stay internally consistent with the return, Box1/Box4/TB
+  left untouched) -- confirms `vat_control_diff` comes out bit-for-bit
+  identical to the same base figures with Box2=0 (1563.27), even though
+  Box5 on the return changes from 1318.93 to 1518.93. **Not changed**:
+  not confident what the "correct" reconstruction formula should be here
+  -- whether NI postponed-accounting entries would (a) net to zero on
+  the VAT control nominal because the offsetting Box4 reclaim is already
+  posted through the same account, in which case today's omission is
+  actually fine, or (b) need Box2 added to the Box1 term the way Box3
+  already is on the return itself, in which case today's formula
+  understates the reconstructed liability by exactly Box2 any time it's
+  non-zero. This is a bookkeeping-treatment question, not a mechanical
+  bug, and it's exactly the kind of live-client VAT-logic question this
+  task says not to guess at. Flagging for Keyaan: if any current or
+  future client operates under NI protocol postponed VAT accounting for
+  EU goods movements, this is worth resolving before relying on the VAT
+  Control tab for them.
 
 ---
 
@@ -644,6 +674,92 @@ fixture directory before committing — final diff is exactly
   for awareness, not logging as an "open question" since nothing here
   looks like unintentional/wrong behaviour, just a sheet that's
   deliberately thinner than the others.
+- No pytest-style tests still; left as-is per Session 1's reasoning.
+
+**Commits this session:** see git log on `claude/holiday-hardening`.
+
+---
+
+## Session 6 — 2026-09-15 (Tuesday)
+
+**Starting state:** picked up `claude/holiday-hardening` from Session 5
+(commit `7b115ba`). `pip install -r requirements.txt` fresh (this
+container had no packages installed).
+
+**Ran (all green, no genuine failures — item 1):**
+- `test_scenarios/run_scenarios.py` — all 11 existing scenarios pass.
+- `test_scenarios/test_unit_helpers.py` — all checks pass.
+- `test_scenarios/test_annual_summary.py` — still OK.
+- `test_scenarios/test_annual_summary_edge_cases.py` — all 7 checks pass.
+- `test_scenarios/test_workbook_builder.py` — all 39 checks pass.
+- `pytest` still not installed / no pytest-style tests anywhere — same
+  conclusion as every prior session, left as-is.
+
+**New focus this session (item 2) — audited the parts of
+`ReconciliationEngine` that read Box 2/Box 7/Box 8/Box 9 (the
+EU-acquisitions/supplies boxes), since no prior session had looked at
+these specifically (all prior scenario/bug work was on Box 1/4/5/6).**
+Found that Box 2 (VAT due on NI-EU acquisitions) is parsed and displayed
+correctly but never enters `_vat_control`'s reconstructed-balance
+formula, even though it does enter Box 3/Box 5 on the return itself —
+see new "Open questions for Keyaan" entry above. Confirmed Box 7/8/9 are
+purely display fields (never fed into any reconciliation arithmetic), so
+no equivalent gap there. Also re-confirmed (as `build_scenarios.py`
+already documents for `scenario_accrual`/`scenario_flat_rate`) that the
+engine never branches on `vat_scheme` beyond display — flat-rate and
+accrual are relabels of the same reconciliation math, so there's no
+separate "flat rate calculation" code path to audit for a scheme-specific
+bug.
+
+**Added two new fixture scenarios** (`test_scenarios/build_scenarios.py`
++ wired into `run_scenarios.py`'s `SCENARIOS` list):
+- `box2_ni_acquisitions` — Box2=200 (NI-EU acquisition VAT), Box3/Box5
+  updated to stay internally consistent with the return, Box1/Box4/TB
+  left untouched. Pins down the Box 2 gap above as a regression-tested
+  fact (`vat_control_diff` == the Box2=0 baseline, 1563.27) rather than
+  just a one-off finding — if a future change makes `_vat_control` start
+  referencing Box 2, this assertion will fail and need deliberate
+  updating, not silently keep passing.
+- `box6_diff_at_tolerance` — same idea as Session 2's
+  `control_diff_at_tolerance` (which pins `vat_control_diff` to the
+  general £1.00 tolerance boundary) but for `box6_diff` against its own
+  wider £5.00 tolerance (`cfg.tol_box6`), using real Xero-shaped figures
+  end-to-end rather than only the synthetic `WorkbookBuilder` check
+  Session 5 already added. TB nominal 200 (Sales) set to a credit balance
+  of 14,981.00 against the base demo's unmodified Box6=14,986.00, landing
+  `box6_diff` at exactly 5.00. Confirms the real pipeline's rounding
+  doesn't nudge this specific boundary off what `_flag(tol=cfg.tol_box6)`
+  considers reconciled, closing the gap Session 3 left open ("rounding at
+  VAT-box boundaries" was previously only pinned down for Box 1/4's
+  general tolerance, not Box 6's wider one, through the full pipeline).
+
+**No new low-risk bugs found this session (item 4)** — the Box 2 finding
+above is a bookkeeping-treatment judgement call, not a mechanical bug
+(no off-by-one, no wrong rounding direction, no contradiction of
+documented logic — the code's own docstring for `_vat_control` states
+exactly the formula it implements), so logged as an open question rather
+than fixed, per this task's explicit instruction not to guess at VAT
+rules.
+
+**Note on regenerated fixtures (same caveat as every prior session):**
+`run_scenarios.py` and the other test files rewrite zip-internal metadata
+on every scenario `.xlsx` even when no cell value changes. `git status` +
+`git checkout --` after every run this session — final diff is exactly
+`test_scenarios/build_scenarios.py`, `test_scenarios/run_scenarios.py`,
+the two new scenario directories, and this log.
+
+**Still open for next session:**
+- The five "Open questions for Keyaan" above (app.py logic placement,
+  `InputValidator` required-file severity, `AnnualSummaryBuilder` Q-label
+  positional numbering, File Register unconfigured-file red-flag, and
+  this session's new Box 2/`_vat_control` gap) — still need Keyaan's
+  input, don't act without them.
+- Haven't looked closely yet at `TxnByBoxParser`'s handling of the EU
+  supplies/acquisitions transaction sections (`Box 8`/`Box 9` sub-headers
+  in the Transactions-by-VAT-Box sheet, if a real Xero export ever
+  populates them) — everything checked this session was at the
+  `ReconciliationEngine`/`VATBoxes` level, not the parser's row-grouping
+  for those specific sections. Worth a look if nothing else stands out.
 - No pytest-style tests still; left as-is per Session 1's reasoning.
 
 **Commits this session:** see git log on `claude/holiday-hardening`.

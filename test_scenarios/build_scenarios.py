@@ -306,6 +306,53 @@ def scenario_control_diff_at_tolerance():
     wb.save(out / FILES["trial_balance"])
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 9: Box 2 (VAT due on acquisitions of goods made in Northern
+#   Ireland from EU member states) is non-zero -- a real, if uncommon, UK
+#   VAT position for NI businesses trading goods with the EU. Box3 (=
+#   Box1+Box2) and Box5 (=Box3-Box4) are updated on the VAT Return to stay
+#   internally consistent; Box1/Box4 and the Trial Balance are left
+#   untouched, isolating Box2's effect. This exists to pin down current
+#   behaviour for the "does _vat_control account for Box2" open question
+#   (see HOLIDAY_LOG.md) -- not to fix anything.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_box2_ni_acquisitions():
+    out = _copy_base("box2_ni_acquisitions")
+    wb = _load(out, "vat_return")
+    ws = wb["VAT Return"]
+    box1 = ws["C15"].value
+    box4 = ws["C18"].value
+    box2 = 200.00
+    ws["C16"] = box2                    # Box 2
+    ws["C17"] = round(box1 + box2, 2)   # Box 3 = Box1 + Box2
+    ws["C19"] = round(box1 + box2 - box4, 2)  # Box 5 = Box3 - Box4
+    wb.save(out / FILES["vat_return"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 10: Box 6 vs TB diff landing exactly on its own tolerance
+#   boundary (cfg.tol_box6 = £5.00, wider than the general £1.00 used
+#   everywhere else -- see _sheet_box6_rec's explicit tol=cfg.tol_box6).
+#   Same idea as scenario_control_diff_at_tolerance but for the box6_diff
+#   flag rather than vat_control_diff, and with real Xero-shaped figures
+#   rather than only the synthetic WorkbookBuilder check. With the base
+#   demo VAT Return unmodified (Box6=14986.00) and the default
+#   other_income_nominals=[270] contributing 0 (no nominal 270 row in the
+#   demo TB), box6_tb_total is just the Sales (200) balance. Setting
+#   nominal 200 to a credit balance of 14981.00 makes
+#   box6_diff = 14986.00 - 14981.00 = 5.00 exactly.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_box6_diff_at_tolerance():
+    out = _copy_base("box6_diff_at_tolerance")
+    wb = _load(out, "trial_balance")
+    ws = wb["Trial Balance"]
+    for row in ws.iter_rows(min_row=6):
+        if str(row[0].value) == "200":  # Account Code is stored as text in Xero exports
+            row[3].value = 0         # Debit
+            row[4].value = 14981.00  # Credit -> Cr-Dr = 14981.00
+    wb.save(out / FILES["trial_balance"])
+
+
 if __name__ == "__main__":
     scenarios = [
         scenario_flat_rate,
@@ -319,6 +366,8 @@ if __name__ == "__main__":
         scenario_minimal_files,
         scenario_empty_trial_balance,
         scenario_control_diff_at_tolerance,
+        scenario_box2_ni_acquisitions,
+        scenario_box6_diff_at_tolerance,
     ]
     for fn in scenarios:
         fn()
