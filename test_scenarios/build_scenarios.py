@@ -153,10 +153,60 @@ def scenario_vat_repayment():
     wb = _load(out, "trial_balance")
     ws = wb["Trial Balance"]
     for row in ws.iter_rows(min_row=6):
-        if row[0].value == 820:
+        if str(row[0].value) == "820":  # Account Code is stored as text in Xero exports
             row[3].value = 0       # Debit
             row[4].value = 1000    # Credit -> Cr-Dr = +1000 (asset/repayment owed)
     wb.save(out / FILES["trial_balance"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 4b: Credit-note-heavy quarter -- Box 1 (output VAT) goes
+#   negative because credit notes issued in the period exceed VAT on
+#   sales. A legitimate UK VAT position (HMRC allows negative boxes),
+#   not an error case -- checks the engine handles a negative Box1/Box3
+#   without crashing or mis-signing the VAT proof / control diffs.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_credit_note_heavy():
+    out = _copy_base("credit_note_heavy")
+    wb = _load(out, "vat_return")
+    ws = wb["VAT Return"]
+    ws["C15"] = -300.00    # Box 1 (output VAT, net of credit notes -> negative)
+    ws["C17"] = -300.00    # Box 3 = Box1 + Box2(0)
+    ws["C18"] = 200.00     # Box 4 (input VAT)
+    ws["C19"] = -500.00    # Box 5 = Box3 - Box4
+    wb.save(out / FILES["vat_return"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 4d: Negative Box 4 -- input VAT (VAT reclaimed on purchases)
+#   goes negative because purchase credit notes / returns in the period
+#   exceed VAT incurred on purchases. A legitimate UK VAT position
+#   (distinct from `vat_repayment`, where Box4 > Box1 but Box4 itself is
+#   still a plausible positive number, and from `credit_note_heavy`,
+#   which drives Box1 negative on the sales side) -- checks the engine
+#   handles a negative Box4 (and the resulting Box3-Box4 arithmetic in
+#   Box5 and the VAT control reconstruction) without mis-signing anything.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_negative_box4():
+    out = _copy_base("negative_box4")
+    wb = _load(out, "vat_return")
+    ws = wb["VAT Return"]
+    ws["C15"] = 2598.24    # Box 1 (output VAT, unchanged from base)
+    ws["C17"] = 2598.24    # Box 3 = Box1 + Box2(0)
+    ws["C18"] = -150.00    # Box 4 (input VAT, net negative from purchase credit notes)
+    ws["C19"] = 2748.24    # Box 5 = Box3 - Box4 = 2598.24 - (-150.00)
+    wb.save(out / FILES["vat_return"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 4c: Missing required file -- VAT Return itself is absent.
+#   InputValidator must flag this as an error (not just a warning) and
+#   VATWorkflowService.run_job must raise InputError cleanly rather than
+#   crash with a file-not-found traceback.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_missing_vat_return():
+    out = _copy_base("missing_vat_return")
+    (out / FILES["vat_return"]).unlink()
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -217,14 +267,107 @@ def scenario_minimal_files():
         (out / FILES[key]).unlink()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 7: Genuinely empty Trial Balance -- header row present but zero
+#   account-code data rows (distinct from `dormant`, which keeps every TB
+#   row but zeroes its values). VAT Return keeps real, non-zero figures.
+#   Checks that every TB nominal lookup (_tb_balance -> VAT control, Box 6
+#   sales/other-income, aged-report BS ties) degrades to 0.0 rather than
+#   raising KeyError/IndexError when the account code simply isn't present.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_empty_trial_balance():
+    out = _copy_base("empty_trial_balance")
+    wb = _load(out, "trial_balance")
+    ws = wb["Trial Balance"]
+    max_row = ws.max_row  # includes the trailing "Total" formula row
+    if max_row > 6:
+        ws.delete_rows(6, max_row - 6)  # keep header (row 5) + Total row only
+    wb.save(out / FILES["trial_balance"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 8: VAT control diff landing exactly on the tolerance boundary
+#   (cfg.tol_general = £1.00), using real Xero-shaped figures rather than
+#   a synthetic unit-test value. With the base demo VAT Return unmodified
+#   (Box1=2598.24, Box4=1279.31, no HMRC payments in Account Txns), the
+#   reconstructed control balance is 1318.93. Setting TB nominal 820 to
+#   1317.93 makes vat_control_diff = 1318.93 - 1317.93 = 1.00 exactly --
+#   `_flag()` treats abs(diff) <= tol as green, so this should reconcile
+#   clean end-to-end (not just in the isolated _flag() unit check).
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_control_diff_at_tolerance():
+    out = _copy_base("control_diff_at_tolerance")
+    wb = _load(out, "trial_balance")
+    ws = wb["Trial Balance"]
+    for row in ws.iter_rows(min_row=6):
+        if str(row[0].value) == "820":  # Account Code is stored as text in Xero exports
+            row[3].value = 0         # Debit
+            row[4].value = 1317.93   # Credit -> Cr-Dr = 1317.93
+    wb.save(out / FILES["trial_balance"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 9: Box 2 (VAT due on acquisitions of goods made in Northern
+#   Ireland from EU member states) is non-zero -- a real, if uncommon, UK
+#   VAT position for NI businesses trading goods with the EU. Box3 (=
+#   Box1+Box2) and Box5 (=Box3-Box4) are updated on the VAT Return to stay
+#   internally consistent; Box1/Box4 and the Trial Balance are left
+#   untouched, isolating Box2's effect. This exists to pin down current
+#   behaviour for the "does _vat_control account for Box2" open question
+#   (see HOLIDAY_LOG.md) -- not to fix anything.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_box2_ni_acquisitions():
+    out = _copy_base("box2_ni_acquisitions")
+    wb = _load(out, "vat_return")
+    ws = wb["VAT Return"]
+    box1 = ws["C15"].value
+    box4 = ws["C18"].value
+    box2 = 200.00
+    ws["C16"] = box2                    # Box 2
+    ws["C17"] = round(box1 + box2, 2)   # Box 3 = Box1 + Box2
+    ws["C19"] = round(box1 + box2 - box4, 2)  # Box 5 = Box3 - Box4
+    wb.save(out / FILES["vat_return"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 10: Box 6 vs TB diff landing exactly on its own tolerance
+#   boundary (cfg.tol_box6 = £5.00, wider than the general £1.00 used
+#   everywhere else -- see _sheet_box6_rec's explicit tol=cfg.tol_box6).
+#   Same idea as scenario_control_diff_at_tolerance but for the box6_diff
+#   flag rather than vat_control_diff, and with real Xero-shaped figures
+#   rather than only the synthetic WorkbookBuilder check. With the base
+#   demo VAT Return unmodified (Box6=14986.00) and the default
+#   other_income_nominals=[270] contributing 0 (no nominal 270 row in the
+#   demo TB), box6_tb_total is just the Sales (200) balance. Setting
+#   nominal 200 to a credit balance of 14981.00 makes
+#   box6_diff = 14986.00 - 14981.00 = 5.00 exactly.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_box6_diff_at_tolerance():
+    out = _copy_base("box6_diff_at_tolerance")
+    wb = _load(out, "trial_balance")
+    ws = wb["Trial Balance"]
+    for row in ws.iter_rows(min_row=6):
+        if str(row[0].value) == "200":  # Account Code is stored as text in Xero exports
+            row[3].value = 0         # Debit
+            row[4].value = 14981.00  # Credit -> Cr-Dr = 14981.00
+    wb.save(out / FILES["trial_balance"])
+
+
 if __name__ == "__main__":
     scenarios = [
         scenario_flat_rate,
         scenario_accrual,
         scenario_large_numbers,
         scenario_vat_repayment,
+        scenario_credit_note_heavy,
+        scenario_negative_box4,
+        scenario_missing_vat_return,
         scenario_dormant,
         scenario_minimal_files,
+        scenario_empty_trial_balance,
+        scenario_control_diff_at_tolerance,
+        scenario_box2_ni_acquisitions,
+        scenario_box6_diff_at_tolerance,
     ]
     for fn in scenarios:
         fn()

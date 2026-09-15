@@ -25,8 +25,15 @@ SCENARIOS = [
     "accrual",
     "large_numbers",
     "vat_repayment",
+    "credit_note_heavy",
+    "negative_box4",
+    "missing_vat_return",
     "dormant",
     "minimal_files",
+    "empty_trial_balance",
+    "control_diff_at_tolerance",
+    "box2_ni_acquisitions",
+    "box6_diff_at_tolerance",
 ]
 
 
@@ -50,6 +57,42 @@ def run(name: str) -> bool:
         print(f"     box1={s['box1']} box4={s['box4']} box5={s['box5']} box6={s['box6']}")
         print(f"     vat_proof_diff={s['vat_proof_diff']} vat_control_diff={s['vat_control_diff']} box6_diff={s['box6_diff']}")
         print(f"     workbook={s['workbook']}")
+
+        if name == "control_diff_at_tolerance":
+            # Fixture is built so the reconstructed VAT control balance sits
+            # exactly £1.00 (cfg.tol_general) away from the TB figure --
+            # confirms the real pipeline's rounding doesn't nudge a
+            # boundary case off of what _flag() considers "reconciled".
+            diff = s["vat_control_diff"]
+            assert abs(abs(diff) - 1.00) < 1e-9, (
+                f"expected vat_control_diff to land exactly at £1.00 boundary, got {diff}"
+            )
+
+        if name == "box2_ni_acquisitions":
+            # Box2 (NI EU acquisitions VAT) is non-zero on the return, but
+            # Box1/Box4/TB are unchanged from the base demo file -- documents
+            # that _vat_control's reconstruction (opening + Box1 - Box4 -
+            # HMRC payments) doesn't reference Box2 at all, so vat_control_diff
+            # comes out identical to the unmodified base figures (1563.27,
+            # same as e.g. the "accrual" scenario which shares that base).
+            # See HOLIDAY_LOG.md open question -- not asserting this is
+            # correct or incorrect, just pinning down current behaviour.
+            diff = s["vat_control_diff"]
+            assert abs(diff - 1563.27) < 1e-9, (
+                f"expected vat_control_diff unaffected by Box2, got {diff}"
+            )
+
+        if name == "box6_diff_at_tolerance":
+            # Fixture is built so box6_diff sits exactly at cfg.tol_box6
+            # (£5.00) rather than the general £1.00 tolerance -- confirms
+            # _sheet_box6_rec's wider tolerance for this specific diff holds
+            # up through the real pipeline, not just the synthetic
+            # WorkbookBuilder check.
+            diff = s["box6_diff"]
+            assert abs(abs(diff) - 5.00) < 1e-9, (
+                f"expected box6_diff to land exactly at £5.00 boundary, got {diff}"
+            )
+
         return True
     except (InputError, ParseError) as e:
         print(f"\n  >> {name}: HANDLED ERROR — {e}")
