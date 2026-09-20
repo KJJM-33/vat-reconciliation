@@ -1027,6 +1027,15 @@ class WorkbookBuilder:
 
         def _get(box, sub): return data.txn_sections.get(f"{box}|{sub}", pd.DataFrame())
 
+        # Box 8/9 sub-labels vary by client (whatever Xero grouped under
+        # that box), unlike 1/4/6/7 above where the sub-labels are known
+        # and stable -- so pick up whatever TxnByBoxParser actually parsed
+        # for that box rather than a hard-coded, possibly-wrong label.
+        def _subs(box):
+            prefix = f"{box}|"
+            return [(k[len(prefix):], df) for k, df in data.txn_sections.items()
+                    if k.startswith(prefix)]
+
         for box_lbl, desc, total, bg, subs in [
             ("Box 1", "VAT due on sales", b.box1, _BLUE,
              [("20% (VAT on Income)", _get("Box 1", "20% (VAT on Income)"))]),
@@ -1041,6 +1050,8 @@ class WorkbookBuilder:
              [("20% (VAT on Expenses)",          _get("Box 7", "20% (VAT on Expenses)")),
               ("20% (VAT on Expenses) - Adjusted", _get("Box 7", "20% (VAT on Expenses) - Adjusted")),
               ("5% (VAT on Expenses)",            _get("Box 7", "5% (VAT on Expenses)"))]),
+            ("Box 8", "EU supplies (NI)", b.box8, _BLUE, _subs("Box 8")),
+            ("Box 9", "EU acquisitions (NI)", b.box9, _GREEN, _subs("Box 9")),
         ]:
             _hdr(ws, r, 1, box_lbl, bg=bg, size=11, span=2)
             _cel(ws, r, 3, desc, bold=True, align="left")

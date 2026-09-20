@@ -8,10 +8,10 @@ completed work. Branch: `claude/holiday-hardening`.
 
 | Item | Status |
 |---|---|
-| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15) — no failures found |
-| 2. Add edge-case coverage | In progress (2026-09-07, 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15) — see below for what's covered / still open |
+| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15, 2026-09-20) — no failures found |
+| 2. Add edge-case coverage | In progress (2026-09-07 .. 2026-09-20) — see below for what's covered / still open |
 | 3. Respect CLAUDE.md Do-Not list | Followed for all code changes. **Found (not fixed) a Do-Not violation in app.py — see open questions below.** |
-| 4. Fix low-risk concrete bugs | 1 fixed (2026-09-08): stale account-code comparison in `build_scenarios.py`. No new bugs found with high confidence in Sessions 3-6 — see below |
+| 4. Fix low-risk concrete bugs | 2 fixed: stale account-code comparison in `build_scenarios.py` (2026-09-08); Box 8/9 transactions silently dropped from the "Transactions by VAT Box" working paper sheet (2026-09-20, `vat_engine.py`). No new bugs found with high confidence in Sessions 3-6 — see below |
 
 ## Open questions for Keyaan (do not act on these without his input)
 
@@ -761,5 +761,105 @@ the two new scenario directories, and this log.
   `ReconciliationEngine`/`VATBoxes` level, not the parser's row-grouping
   for those specific sections. Worth a look if nothing else stands out.
 - No pytest-style tests still; left as-is per Session 1's reasoning.
+
+**Commits this session:** see git log on `claude/holiday-hardening`.
+
+---
+
+## Session 7 — 2026-09-20 (Sunday)
+
+**Starting state:** picked up `claude/holiday-hardening` from Session 6
+(commit `8a01e3d`). `pip install -r requirements.txt` fresh (this container
+had no packages installed).
+
+**Ran (all green, no genuine failures — item 1):**
+- `test_scenarios/run_scenarios.py` — all 13 existing scenarios pass.
+- `test_scenarios/test_unit_helpers.py` — all checks pass.
+- `test_scenarios/test_annual_summary.py` — still OK.
+- `test_scenarios/test_annual_summary_edge_cases.py` — all 7 checks pass.
+- `test_scenarios/test_workbook_builder.py` — all 39 pre-existing checks
+  pass (before this session's addition).
+- `pytest` still not installed / no pytest-style tests anywhere — same
+  conclusion as every prior session, left as-is.
+
+**Took up Session 6's suggested next focus — `TxnByBoxParser`'s handling of
+the EU supplies/acquisitions (Box 8/Box 9) transaction sections (item 2),
+and found a genuine bug while investigating (item 4):**
+
+`_sheet_txn_by_box` (`vat_engine.py`, the "1B. Transactions by VAT Box"
+working-paper sheet) only ever rendered sub-sections for Box 1, 4, 6 and 7 —
+Box 8 and Box 9 were entirely absent from its box list. `TxnByBoxParser`
+itself parses a "Box 8"/"Box 9" section correctly whenever Xero's export has
+one (confirmed against the **real** demo file,
+`demo_files/Demo-Company-UK-VAT-Return.xlsx`, which has an actual "Box 8 →
+Zero Rated EC Goods Income" section with one £1,995 transaction dated
+23/02/2026), and that data flows all the way into
+`data.txn_sections["Box 8|Zero Rated EC Goods Income"]` — but nothing ever
+read it back out. The Box 8/9 *totals* are shown correctly elsewhere (VAT
+Return sheet 1A, and `AnnualSummaryBuilder`'s FY roll-up), so this wasn't
+visible as a wrong figure anywhere — only as missing transaction detail on
+the one sheet whose whole job is to show the transactions behind each box
+figure. For a real NI client with EU goods supplies/acquisitions, this meant
+the underlying evidence for Box 8/9 was silently dropped from the working
+paper the preparer/reviewer actually works from.
+
+**Fixed** (`vat_engine.py`, `_sheet_txn_by_box`): added `Box 8`/`Box 9`
+entries to the same box list Box 1/4/6/7 already use. Box 1/4/6/7 keep their
+existing hard-coded sub-label lookups unchanged (zero behaviour change
+there). For Box 8/9, added a small `_subs(box)` helper that picks up
+*whatever* sub-section labels `TxnByBoxParser` actually parsed for that box
+(`data.txn_sections` keys starting with `"Box 8|"`/`"Box 9|"`), rather than
+hard-coding a specific sub-label the way Box 1/4/6/7 do — deliberately
+avoided guessing what Xero's Box 9 sub-label would be (the demo file's Box 9
+is empty, so there's no real example to confirm against; a wrong guessed
+label would just silently render nothing again, recreating the same bug).
+This only adds two missing entries to an existing list — no other code path
+touched, no reconciliation figure changed, no VAT treatment decided.
+
+Verified end-to-end on real data, not just the unit test: regenerated the
+`flat_rate` scenario workbook and confirmed row-by-row that the real Box 8
+transaction (`INV-0042`, £1,995, "Zero Rated EC Goods Income") now renders
+under its own "Box 8" banner, and Box 9 renders its (zero) total cleanly
+with no sub-sections and no crash.
+
+**Added test coverage:** `test_scenarios/test_workbook_builder.py`,
+`test_txn_by_box_box8_box9_render_via_dynamic_subsections` — synthetic Box 8
+data with a sub-label that isn't one of Box 1/4/6/7's known labels, to prove
+the lookup is genuinely dynamic and not coincidentally matching a
+hard-coded string; asserts the Box 8 banner, its dynamically-found
+sub-header, its transaction row, and the Box 9 banner (empty, no crash) all
+render at the correct rows. All 40 `test_workbook_builder.py` checks and all
+13 `run_scenarios.py` scenarios still pass after the change.
+
+**No other new low-risk bugs found this session.** Confirmed Box 7/8/9
+remain purely display fields elsewhere (Session 6's earlier finding still
+holds) — this session's fix is a rendering-completeness gap, not a
+reconciliation-arithmetic change, so it doesn't touch or reopen the
+Box 2/`_vat_control` open question logged by Session 6.
+
+**Note on regenerated fixtures (same caveat as every prior session, with one
+addition):** this session's `.xlsx` diffs under `test_scenarios/` are *not*
+pure metadata churn like prior sessions' — because `vat_engine.py` itself
+changed, every scenario's regenerated output workbook now genuinely contains
+new Box 8/Box 9 rows on its "1B. Txns by VAT Box" sheet wherever the
+scenario's VAT Return has Box 8/9 data (most do, inherited from the base
+demo file). Reviewed one (`flat_rate`) cell-by-cell to confirm the new
+content is exactly the expected Box 8/9 addition and nothing else, then kept
+all the regenerated scenario workbooks as-is (this is the correct/intended
+new output, not noise to revert) rather than the usual `git checkout --`.
+
+**Still open for next session:**
+- The five "Open questions for Keyaan" (app.py logic placement,
+  `InputValidator` required-file severity, `AnnualSummaryBuilder` Q-label
+  positional numbering, File Register unconfigured-file red-flag, Box 2/
+  `_vat_control` gap) — still need Keyaan's input, don't act without them.
+- Box 8/Box 9 rendering gap (this session's finding) is now fixed and
+  covered — no longer open.
+- No pytest-style tests still; left as-is per Session 1's reasoning.
+- Haven't found a new concrete area to focus on for Session 8 yet beyond
+  the standing open questions above — worth a fresh read of
+  `InputValidator`/`ParseManager` error-message wording and the
+  `VATWorkflowService` orchestration layer next, since Sessions 1-7 have
+  been mostly parser/reconciliation/workbook-layer focused.
 
 **Commits this session:** see git log on `claude/holiday-hardening`.

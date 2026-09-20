@@ -245,6 +245,38 @@ def test_txn_by_box_writes_totals_and_skips_empty_subsections():
           ws.cell(row=24, column=6).value, 0.0)
 
 
+def test_txn_by_box_box8_box9_render_via_dynamic_subsections():
+    """Box 8/9 (EU supplies/acquisitions, NI) previously had no entry at all in
+    _sheet_txn_by_box's box list -- their transactions were parsed correctly by
+    TxnByBoxParser but silently never rendered anywhere in the working paper.
+    Unlike Box 1/4/6/7 (fixed, known sub-labels), Box 8/9's sub-label is
+    whatever Xero grouped under that box for a given client, so this must be
+    picked up dynamically from data.txn_sections rather than hard-coded."""
+    builder = WorkbookBuilder()
+    cfg = _cfg()
+    validation = ValidationResult()
+    b8_ec = pd.DataFrame([{"Date": "23/02/2026", "Account": "Sales(200)", "Reference": "INV-0042",
+                            "Details": "EC goods sale", "VAT": 0.0, "Net": 1995.0}])
+    data = ParsedData(
+        boxes=_boxes(box8=1995.0, box9=0.0),
+        txn_sections={"Box 8|Zero Rated EC Goods Income": b8_ec},
+    )
+    recs = ReconciliationResults()
+
+    wb = Workbook()
+    ws = wb.active
+    builder._sheet_txn_by_box(ws, cfg, validation, data, recs)
+
+    check("Txn by box: Box 8 label written", ws.cell(row=18, column=1).value, "Box 8")
+    check("Txn by box: Box 8 total written", ws.cell(row=18, column=6).value, 1995.0)
+    check("Txn by box: Box 8 sub-header picked up from parsed data (not hard-coded)",
+          ws.cell(row=19, column=1).value, "Zero Rated EC Goods Income")
+    check("Txn by box: Box 8 transaction row written", ws.cell(row=21, column=3).value, "INV-0042")
+    check("Txn by box: Box 9 label written", ws.cell(row=24, column=1).value, "Box 9")
+    check("Txn by box: Box 9 total written (zero, no sub-sections)",
+          ws.cell(row=24, column=6).value, 0.0)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # 2A. VAT Control: HMRC-payments table + closing reconciliation diff flag
 # ─────────────────────────────────────────────────────────────────────────
