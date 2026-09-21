@@ -403,6 +403,52 @@ def test_top10_box4_rows_and_total():
           ws2.cell(row=11, column=5).value, 0.0)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# cfg.tol_general must actually govern the diff-flag colouring everywhere
+# it's meant to (VAT control, VAT proof, aged payables/receivables BS
+# agreement) -- previously these four _flag() calls all relied on _flag's
+# own hard-coded tol=1.00 default and silently ignored cfg.tol_general,
+# even though cfg.tol_box6 was (correctly) threaded through to the one
+# _flag() call that uses it. Invisible with the default tol_general=1.00
+# (which is every real caller today), but a genuine bug for any JobConfig
+# built with a non-default tol_general.
+# ─────────────────────────────────────────────────────────────────────────
+def test_general_tolerance_is_read_from_config_not_hardcoded():
+    builder = WorkbookBuilder()
+    cfg = _cfg(tol_general=3.00, opening_vat_balance=0.0, vat_control_nominal=820)
+    validation = ValidationResult()
+    data = ParsedData(boxes=_boxes(box1=2598.24, box4=1279.31, box6=14986.0))
+
+    # A £2 diff is outside _flag's hard-coded default (£1) but inside this
+    # cfg's own tol_general (£3) -- must be green, not red.
+    recs = ReconciliationResults(
+        vat_control_tb=0.0, vat_control_diff=2.00,
+        vat_proof_diff=2.00,
+        ap_total=100.0, bs_creditors=-98.0, ap_bs_diff=2.00,
+        ar_total=100.0, bs_debtors=98.0, ar_bs_diff=2.00,
+    )
+
+    wb = Workbook()
+    builder._sheet_vat_control(wb.create_sheet("vc"), cfg, validation, data, recs)
+    check("VAT Control diff within custom tol_general (£3) is green, not red",
+          fg(wb["vc"].cell(row=31, column=3)), _GREEN)
+
+    wb2 = Workbook()
+    builder._sheet_box6_rec(wb2.create_sheet("b6"), cfg, validation, data, recs)
+    check("VAT proof diff within custom tol_general (£3) is green, not red",
+          fg(wb2["b6"].cell(row=31, column=3)), _GREEN)
+
+    wb3 = Workbook()
+    builder._sheet_aged_payables(wb3.create_sheet("ap"), cfg, validation, data, recs)
+    check("Aged Payables BS-diff within custom tol_general (£3) is green, not red",
+          fg(wb3["ap"].cell(row=9, column=6)), _GREEN)
+
+    wb4 = Workbook()
+    builder._sheet_aged_receivables(wb4.create_sheet("ar"), cfg, validation, data, recs)
+    check("Aged Receivables BS-diff within custom tol_general (£3) is green, not red",
+          fg(wb4["ar"].cell(row=9, column=6)), _GREEN)
+
+
 if __name__ == "__main__":
     test_box5_owed_is_red_repayment_is_green()
     test_trial_balance_vat_control_row_highlighted()
@@ -410,10 +456,12 @@ if __name__ == "__main__":
     test_file_register_match_column()
     test_checklist_all_items_rendered()
     test_txn_by_box_writes_totals_and_skips_empty_subsections()
+    test_txn_by_box_box8_box9_render_via_dynamic_subsections()
     test_vat_control_hmrc_payments_table_and_diff_flag()
     test_bank_rec_balances_and_difference_shading()
     test_box6_rec_proof_of_output_vat_block()
     test_top10_box4_rows_and_total()
+    test_general_tolerance_is_read_from_config_not_hardcoded()
 
     print("\n" + "=" * 60)
     if failures:

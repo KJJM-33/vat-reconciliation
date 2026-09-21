@@ -8,10 +8,10 @@ completed work. Branch: `claude/holiday-hardening`.
 
 | Item | Status |
 |---|---|
-| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15, 2026-09-20) — no failures found |
-| 2. Add edge-case coverage | In progress (2026-09-07 .. 2026-09-20) — see below for what's covered / still open |
+| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15, 2026-09-20, 2026-09-21) — no failures found |
+| 2. Add edge-case coverage | In progress (2026-09-07 .. 2026-09-21) — see below for what's covered / still open |
 | 3. Respect CLAUDE.md Do-Not list | Followed for all code changes. **Found (not fixed) a Do-Not violation in app.py — see open questions below.** |
-| 4. Fix low-risk concrete bugs | 2 fixed: stale account-code comparison in `build_scenarios.py` (2026-09-08); Box 8/9 transactions silently dropped from the "Transactions by VAT Box" working paper sheet (2026-09-20, `vat_engine.py`). No new bugs found with high confidence in Sessions 3-6 — see below |
+| 4. Fix low-risk concrete bugs | 4 fixed: stale account-code comparison in `build_scenarios.py` (2026-09-08); Box 8/9 transactions silently dropped from the "Transactions by VAT Box" working paper sheet (2026-09-20, `vat_engine.py`); `cfg.tol_general` silently ignored by 4 of 5 `_flag()` diff-colouring calls in `WorkbookBuilder`/the CLI summary printer (2026-09-21, `vat_engine.py`); Session 7's own Box 8/9 regression test was defined but never wired into `test_workbook_builder.py`'s `__main__` run list, so it silently never executed (2026-09-21, `test_scenarios/test_workbook_builder.py`). See Session 8 below for detail |
 
 ## Open questions for Keyaan (do not act on these without his input)
 
@@ -760,6 +760,146 @@ the two new scenario directories, and this log.
   populates them) — everything checked this session was at the
   `ReconciliationEngine`/`VATBoxes` level, not the parser's row-grouping
   for those specific sections. Worth a look if nothing else stands out.
+- No pytest-style tests still; left as-is per Session 1's reasoning.
+
+**Commits this session:** see git log on `claude/holiday-hardening`.
+
+---
+
+## Session 8 — 2026-09-21 (Monday)
+
+**Starting state:** picked up `claude/holiday-hardening` from Session 7
+(commit `76c614a`). Branch already existed remotely (`git fetch origin` +
+`git checkout -B claude/holiday-hardening origin/claude/holiday-hardening`).
+`pip install -r requirements.txt` fresh (this container had no packages
+installed).
+
+**Ran (all green, no genuine failures — item 1):**
+- `test_scenarios/run_scenarios.py` — all 13 existing scenarios pass.
+- `test_scenarios/test_unit_helpers.py` — all checks pass.
+- `test_scenarios/test_annual_summary.py` — still OK.
+- `test_scenarios/test_annual_summary_edge_cases.py` — all 7 checks pass.
+- `test_scenarios/test_workbook_builder.py` — all 40 pre-existing checks
+  pass (before this session's additions/fix — see below, that count was
+  misleading).
+- `pytest` still not installed / no pytest-style tests anywhere — same
+  conclusion as every prior session, left as-is.
+
+**Took up Session 7's suggested next focus — `InputValidator`/
+`ParseManager` error-message wording and the `VATWorkflowService`
+orchestration layer (item 2).** Read `InputValidator.validate()`,
+`ParseManager.parse_all()`, and `VATWorkflowService.run_job()` +
+`_print_validation`/`_print_summary` end-to-end. Error/warning message
+wording (`InputError` messages, `ValidationResult.warn()` calls) is clear,
+consistent, and each one names the specific file — no wording bugs found.
+
+**While reading `VATWorkflowService._print_summary` and
+`WorkbookBuilder`'s sheet methods side by side, found a genuine bug (item
+4):** `JobConfig.tol_general` (the configurable "general" reconciliation
+tolerance, £1.00 by default, documented alongside `tol_box6` under the
+"tolerances" section of `JobConfig`) is silently ignored by 4 of the 5
+`_flag()` calls that colour a reconciliation diff green/red in the actual
+Excel working paper:
+- `_sheet_vat_control`'s closing-difference cell (`recs.vat_control_diff`)
+- `_sheet_box6_rec`'s proof-of-output-VAT difference (`recs.vat_proof_diff`)
+- `_sheet_aged_payables`'s BS-agreement diff (`recs.ap_bs_diff`)
+- `_sheet_aged_receivables`'s BS-agreement diff (`recs.ar_bs_diff`)
+
+All four call `_flag(ws, row, col, value)` with no `tol=` argument, so
+they fall back to `_flag()`'s own hard-coded `tol=1.00` default instead of
+reading `cfg.tol_general` — even though `cfg` is in scope in every one of
+these methods and the *fifth* `_flag()` call in the same class
+(`_sheet_box6_rec`'s QE-vs-YTD diff) already correctly passes
+`tol=cfg.tol_box6`. `VATWorkflowService._print_summary`'s CLI summary
+output had the identical bug (four hard-coded `<=1` checks). Confirmed via
+`grep` that `app.py`'s own duplicate tolerance-check function (`_status`,
+already flagged as a Do-Not-list item above) *does* correctly read
+`cfg.tol_general` — so the intent that this field should govern these
+exact four checks isn't in doubt, it's a straightforward wiring omission
+in `vat_engine.py` itself.
+
+**Why this was invisible until now:** `tol_general` defaults to `1.00`,
+exactly matching `_flag()`'s own hard-coded default, and nothing in
+`app.py` (the only real caller) or any existing test/fixture ever
+constructs a `JobConfig` with a non-default `tol_general` — so every
+existing scenario, unit test, and the live Streamlit app all produced
+identical output before and after this fix. It only matters for a caller
+that explicitly sets `JobConfig(tol_general=X, ...)` with `X != 1.00` (a
+direct API/CLI use case per `VATWorkflowService`'s own docstring), which
+doesn't exist anywhere in the codebase today.
+
+**Fixed** (`vat_engine.py`): passed `tol=cfg.tol_general` explicitly to
+all four `_flag()` calls above, and threaded `cfg.tol_general` through to
+`_print_summary` (new optional parameter, default `1.00` so nothing else
+calling it breaks) so the CLI output's ✓/✗ markers use the same tolerance
+as the Excel cells. Mechanical fix only — no reconciliation arithmetic,
+VAT treatment, or default behaviour changed; confirmed with the full test
+suite (all still green) that this is a no-op for every existing caller.
+
+**Verified the fix actually does something**, not just "doesn't break
+anything": added a new test
+(`test_scenarios/test_workbook_builder.py`,
+`test_general_tolerance_is_read_from_config_not_hardcoded`) that builds a
+`JobConfig(tol_general=3.00, ...)` with a £2.00 diff on all four affected
+checks — outside `_flag`'s hard-coded £1 default but inside this cfg's own
+£3 tolerance — and asserts the cells render green, not red. Confirmed this
+test genuinely catches the bug by temporarily `git stash`-ing the
+`vat_engine.py` fix and re-running: all 4 new assertions failed as
+expected (green expected, red/`FCE4D6` actually rendered), then restored
+the fix and re-ran clean.
+
+**Second bug found while adding the above test (item 4):** while wiring
+the new test into `test_workbook_builder.py`'s `__main__` block, noticed
+Session 7's own new test function,
+`test_txn_by_box_box8_box9_render_via_dynamic_subsections` (the regression
+test for Session 7's Box 8/9 rendering fix), was defined in the file but
+**never actually called** — missing from the `if __name__ == "__main__":`
+list of test invocations. Confirmed by running the file before this
+session's fix and grepping the output for "Box 8"/"Box 9": zero matches,
+i.e. its 5 assertions silently never executed, despite Session 7's log
+entry claiming "All 40 `test_workbook_builder.py` checks ... still pass"
+(that count was of the checks that *did* run, which never included these
+5 — the file's own internal total was simply wrong, not dishonest, since
+`failures`/`ok` counting has no way to know about a function that's never
+invoked). This meant the Box 8/9 fix had *zero* real regression coverage
+protecting it, not the coverage Session 7's log implied. **Fixed**: added
+the missing call. Re-ran and confirmed the 5 previously-silent assertions
+now genuinely execute and pass (44 checks were actually running before
+this session; 49 after adding both the missing call and the new
+`tol_general` test — the file's own pass/fail counting is accurate again).
+
+**Note on regenerated fixtures (same caveat as every prior session):**
+`run_scenarios.py` and other test files rewrite zip-internal metadata on
+every scenario `.xlsx` even when no cell value changes; the `git stash`
+verification step above also touched every scenario workbook's metadata.
+`git status` + `git checkout --` after every run and after the stash
+round-trip — final diff is exactly `vat_engine.py` (the tolerance fix) and
+`test_scenarios/test_workbook_builder.py` (the missing call + new test),
+plus this log.
+
+**No new "Open questions for Keyaan" this session** — both findings above
+are mechanical wiring/test-harness bugs with a single unambiguous fix, not
+judgement calls about VAT treatment or UI/layer placement, so fixed
+directly per item 4 rather than logged as open questions.
+
+**Still open for next session:**
+- The five "Open questions for Keyaan" (app.py logic placement,
+  `InputValidator` required-file severity, `AnnualSummaryBuilder` Q-label
+  positional numbering, File Register unconfigured-file red-flag, Box 2/
+  `_vat_control` gap) — still need Keyaan's input, don't act without them.
+- `InputValidator`/`ParseManager`/`VATWorkflowService` error-message
+  wording checked out clean this session — no longer flagged as a
+  specific next-focus area, though obviously worth re-checking if either
+  file changes.
+- Given how the Session 7 dead-test bug was found (only noticed by
+  chance while editing the same file for an unrelated reason), did a
+  quick audit this session of every `test_scenarios/*.py` file's
+  `__main__` block against its own `def test_*` functions
+  (`test_unit_helpers.py`, `test_annual_summary_edge_cases.py`,
+  `test_workbook_builder.py` — `test_annual_summary.py` has no
+  `test_*`-style functions, it's a linear script). No other orphaned test
+  functions found; `test_workbook_builder.py` is now fully wired up too
+  (confirmed after this session's fix).
 - No pytest-style tests still; left as-is per Session 1's reasoning.
 
 **Commits this session:** see git log on `claude/holiday-hardening`.

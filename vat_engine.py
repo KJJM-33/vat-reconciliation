@@ -1124,7 +1124,7 @@ class WorkbookBuilder:
             _note(ws, r, 5, f"Nominal {cfg.vat_control_nominal} not in TB — enter manually")
         r += 1
         _cel(ws, r, 2, "Difference", bold=True, align="left")
-        _flag(ws, r, 3, recs.vat_control_diff)
+        _flag(ws, r, 3, recs.vat_control_diff, tol=cfg.tol_general)
         _note(ws, r, 5, "Green ≤ £1 | Red = investigate")
 
     # ── Sheet 2B: Bank Rec ────────────────────────────────────────────────────
@@ -1191,7 +1191,7 @@ class WorkbookBuilder:
         _cel(ws, r, 3, recs.expected_output_vat, num_fmt=_NUM); r += 1
         _cel(ws, r, 2, "Actual Box 1", align="left"); _cel(ws, r, 3, b.box1, num_fmt=_NUM); r += 1
         _cel(ws, r, 2, "Difference", bold=True, align="left")
-        _flag(ws, r, 3, recs.vat_proof_diff)
+        _flag(ws, r, 3, recs.vat_proof_diff, tol=cfg.tol_general)
 
     # ── Sheet 3A: Aged Payables ───────────────────────────────────────────────
 
@@ -1205,7 +1205,7 @@ class WorkbookBuilder:
         _cel(ws, 9, 1, "Agree to Balance Sheet — Accounts Payable:", bold=True, align="left")
         _cel(ws, 9, 4, abs(recs.bs_creditors), num_fmt=_NUM)
         _cel(ws, 9, 5, recs.ap_total, num_fmt=_NUM)
-        _flag(ws, 9, 6, recs.ap_bs_diff)
+        _flag(ws, 9, 6, recs.ap_bs_diff, tol=cfg.tol_general)
         _note(ws, 9, 7, "BS vs Aged Payables — should be nil")
 
         r = 11
@@ -1245,7 +1245,7 @@ class WorkbookBuilder:
         _cel(ws, 9, 1, "Agree to Balance Sheet — Accounts Receivable:", bold=True, align="left")
         _cel(ws, 9, 4, recs.bs_debtors, num_fmt=_NUM)
         _cel(ws, 9, 5, recs.ar_total, num_fmt=_NUM)
-        _flag(ws, 9, 6, recs.ar_bs_diff)
+        _flag(ws, 9, 6, recs.ar_bs_diff, tol=cfg.tol_general)
         _note(ws, 9, 7, "BS vs Aged Receivables — should be nil")
 
         r = 11
@@ -1552,7 +1552,7 @@ class VATWorkflowService:
         }
 
         log.info("\n  ✓  Done — %s", out_path.name)
-        self._print_summary(summary)
+        self._print_summary(summary, cfg.tol_general)
 
         return JobResult(
             client_name=cfg.client_name,
@@ -1582,17 +1582,17 @@ class VATWorkflowService:
         return resp == "y"
 
     @staticmethod
-    def _print_summary(s: dict):
+    def _print_summary(s: dict, tol_general: float = 1.00):
         print("\n  Key figures:")
         print(f"    Box 1 (Output VAT):        £{s['box1']:>10,.2f}")
         print(f"    Box 4 (Input VAT):         £{s['box4']:>10,.2f}")
         print(f"    Box 5 (VAT to pay):        £{s['box5']:>10,.2f}")
         print(f"    Box 6 (Net sales):         £{s['box6']:>10,.2f}")
-        print(f"    VAT proof diff (exp-act):  £{s['vat_proof_diff']:>10,.2f}  {'✓' if abs(s['vat_proof_diff'])<=1 else '✗'}")
-        print(f"    VAT control diff:          £{s['vat_control_diff']:>10,.2f}  {'✓' if abs(s['vat_control_diff'])<=1 else '✗'}")
+        print(f"    VAT proof diff (exp-act):  £{s['vat_proof_diff']:>10,.2f}  {'✓' if abs(s['vat_proof_diff'])<=tol_general else '✗'}")
+        print(f"    VAT control diff:          £{s['vat_control_diff']:>10,.2f}  {'✓' if abs(s['vat_control_diff'])<=tol_general else '✗'}")
         print(f"    Box 6 vs TB diff:          £{s['box6_diff']:>10,.2f}  (YTD vs QE — expected)")
-        print(f"    Aged Payables total:       £{s['ap_total']:>10,.2f}  BS diff: £{s['ap_bs_diff']:,.2f}  {'✓' if abs(s['ap_bs_diff'])<=1 else '✗'}")
-        print(f"    Aged Receivables total:    £{s['ar_total']:>10,.2f}  BS diff: £{s['ar_bs_diff']:,.2f}  {'✓' if abs(s['ar_bs_diff'])<=1 else '✗'}")
+        print(f"    Aged Payables total:       £{s['ap_total']:>10,.2f}  BS diff: £{s['ap_bs_diff']:,.2f}  {'✓' if abs(s['ap_bs_diff'])<=tol_general else '✗'}")
+        print(f"    Aged Receivables total:    £{s['ar_total']:>10,.2f}  BS diff: £{s['ar_bs_diff']:,.2f}  {'✓' if abs(s['ar_bs_diff'])<=tol_general else '✗'}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
