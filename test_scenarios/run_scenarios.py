@@ -34,6 +34,7 @@ SCENARIOS = [
     "control_diff_at_tolerance",
     "box2_ni_acquisitions",
     "box6_diff_at_tolerance",
+    "box6_domestic_zero_rated",
 ]
 
 
@@ -92,6 +93,34 @@ def run(name: str) -> bool:
             assert abs(abs(diff) - 5.00) < 1e-9, (
                 f"expected box6_diff to land exactly at £5.00 boundary, got {diff}"
             )
+
+        if name == "box6_domestic_zero_rated":
+            # £1,000 of domestic zero-rated income was added to Box 6 (and to
+            # a "Zero Rated Income" transaction sub-section). If _box6()
+            # correctly excludes it from "vatable" (same as it already did
+            # for the EC-flavoured zero-rated sub-section), vat_proof_diff
+            # should be unchanged from the unmodified base scenario (-0.04,
+            # same as e.g. box2_ni_acquisitions/box6_diff_at_tolerance above,
+            # which share the same unmodified Box1/Box6 base figures). If the
+            # £1,000 were still wrongly taxed at 20%, it would land at
+            # -0.04 + 200.00 = 199.96 instead.
+            diff = s["vat_proof_diff"]
+            assert abs(diff - (-0.04)) < 1e-9, (
+                f"expected vat_proof_diff unaffected by domestic zero-rated "
+                f"income (same -0.04 as the unmodified base scenario), got {diff}"
+            )
+
+        if name == "dormant":
+            # Every VAT box (1-9) is meant to be zeroed by build_scenarios.py's
+            # scenario_dormant() -- assert directly against the parsed boxes
+            # (not just box1/4/5/6, which summary exposes) so a future
+            # off-by-one in that fixture generator's row range fails loudly
+            # here rather than silently passing because a given box happened
+            # to already be zero in the base demo file.
+            b = result.parsed.boxes
+            for n in range(1, 10):
+                v = getattr(b, f"box{n}")
+                assert v == 0.0, f"expected dormant scenario Box {n} == 0.0, got {v}"
 
         return True
     except (InputError, ParseError) as e:

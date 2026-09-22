@@ -95,7 +95,7 @@ def scenario_large_numbers():
 
     wb = _load(out, "vat_return")
     ws = wb["VAT Return"]
-    for r in range(15, 27):  # rows with box values, col C; skip col B (box numbers)
+    for r in range(15, 28):  # rows 15-27 = Box 1 through Box 9 inclusive, col C
         c = ws.cell(row=r, column=3)
         if isinstance(c.value, (int, float)):
             c.value = round(c.value * FACTOR, 2)
@@ -219,7 +219,7 @@ def scenario_dormant():
 
     wb = _load(out, "vat_return")
     ws = wb["VAT Return"]
-    for r in range(15, 27):
+    for r in range(15, 28):  # rows 15-27 = Box 1 through Box 9 inclusive
         c = ws.cell(row=r, column=3)
         if isinstance(c.value, (int, float)):
             c.value = 0
@@ -353,6 +353,58 @@ def scenario_box6_diff_at_tolerance():
     wb.save(out / FILES["trial_balance"])
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Scenario 11: Domestic zero-rated income (e.g. most food, books,
+#   children's clothing) alongside standard-rated sales. Distinct from
+#   the existing "Zero Rated EC Goods Income" sub-section already in the
+#   base demo file -- _VAT_SUB_LABELS recognises "Zero Rated Income" as
+#   its own, separate Box 6 sub-section for domestic (non-EC) zero-rated
+#   sales, but _box6()'s VAT proof only excluded the EC-flavoured one from
+#   "vatable" before this session's fix, and _sheet_txn_by_box's Box 6
+#   sub-label list didn't render it at all. Adds a £1,000 net "Zero Rated
+#   Income" transaction and increases Box 6 by the same £1,000, so the VAT
+#   proof (Box 6 x 20% ~= Box 1) is unaffected if -- and only if -- the
+#   new £1,000 is correctly excluded from "vatable": expected_output_vat
+#   should land at the same 2598.20 as the unmodified base scenario
+#   (vat_proof_diff = -0.04, same tiny existing rounding gap), not
+#   2598.20 + (1000 * 0.20) = 2798.20 if the £1,000 were wrongly taxed at
+#   20%.
+# ─────────────────────────────────────────────────────────────────────────
+def scenario_box6_domestic_zero_rated():
+    out = _copy_base("box6_domestic_zero_rated")
+    wb = _load(out, "vat_return")
+
+    ws = wb["VAT Return"]
+    box6 = ws["C22"].value
+    ws["C22"] = round(box6 + 1000.00, 2)  # Box 6 (net sales excl. VAT)
+
+    ws2 = wb["Transactions by VAT Box"]
+    # Insert a new "Zero Rated Income" sub-section right after the existing
+    # "Zero Rated EC Goods Income" one (immediately before the blank row
+    # that precedes "Box 7"), matching the layout TxnByBoxParser expects.
+    box7_row = next(
+        r for r in range(1, ws2.max_row + 1)
+        if str(ws2.cell(row=r, column=1).value).strip() == "Box 7"
+    )
+    insert_at = box7_row - 1  # the blank separator row just above "Box 7"
+    ws2.insert_rows(insert_at, amount=3)
+    ws2.cell(row=insert_at,     column=1, value="Zero Rated Income")
+    ws2.cell(row=insert_at + 1, column=1, value="Date")
+    ws2.cell(row=insert_at + 1, column=2, value="Account")
+    ws2.cell(row=insert_at + 1, column=3, value="Reference")
+    ws2.cell(row=insert_at + 1, column=4, value="Details")
+    ws2.cell(row=insert_at + 1, column=5, value="VAT")
+    ws2.cell(row=insert_at + 1, column=6, value="Net")
+    ws2.cell(row=insert_at + 2, column=1, value="15/02/2026")
+    ws2.cell(row=insert_at + 2, column=2, value="Sales(200)")
+    ws2.cell(row=insert_at + 2, column=3, value="INV-0050")
+    ws2.cell(row=insert_at + 2, column=4, value="Domestic zero-rated sale (children's clothing)")
+    ws2.cell(row=insert_at + 2, column=5, value=0.0)
+    ws2.cell(row=insert_at + 2, column=6, value=1000.0)
+
+    wb.save(out / FILES["vat_return"])
+
+
 if __name__ == "__main__":
     scenarios = [
         scenario_flat_rate,
@@ -368,6 +420,7 @@ if __name__ == "__main__":
         scenario_control_diff_at_tolerance,
         scenario_box2_ni_acquisitions,
         scenario_box6_diff_at_tolerance,
+        scenario_box6_domestic_zero_rated,
     ]
     for fn in scenarios:
         fn()

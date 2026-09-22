@@ -277,6 +277,80 @@ def test_txn_by_box_box8_box9_render_via_dynamic_subsections():
           ws.cell(row=24, column=6).value, 0.0)
 
 
+def test_txn_by_box_box6_domestic_zero_rated_renders_alongside_ec():
+    """Box 6's sub-label list previously only knew "20% (VAT on Income)" and
+    "Zero Rated EC Goods Income" -- a domestic zero-rated sale (e.g. most
+    food, books, children's clothing), which _VAT_SUB_LABELS already
+    recognises as its own distinct "Zero Rated Income" sub-section, was
+    silently dropped from this sheet exactly like the Box 8/9 gap above.
+    Confirms both sub-sections render together, each under its own label."""
+    builder = WorkbookBuilder()
+    cfg = _cfg()
+    validation = ValidationResult()
+    b6_20 = pd.DataFrame([{"Date": "01/01/2026", "Account": "Sales", "Reference": "INV1",
+                            "Details": "Standard-rated sale", "VAT": 500.0, "Net": 2500.0}])
+    b6_zero_dom = pd.DataFrame([{"Date": "15/02/2026", "Account": "Sales", "Reference": "INV-0050",
+                                  "Details": "Domestic zero-rated sale", "VAT": 0.0, "Net": 1000.0}])
+    b6_zero_ec = pd.DataFrame([{"Date": "23/02/2026", "Account": "Sales", "Reference": "INV-0042",
+                                 "Details": "EC goods sale", "VAT": 0.0, "Net": 1995.0}])
+    data = ParsedData(
+        boxes=_boxes(box6=5495.0),
+        txn_sections={
+            "Box 6|20% (VAT on Income)": b6_20,
+            "Box 6|Zero Rated Income": b6_zero_dom,
+            "Box 6|Zero Rated EC Goods Income": b6_zero_ec,
+        },
+    )
+    recs = ReconciliationResults()
+
+    wb = Workbook()
+    ws = wb.active
+    builder._sheet_txn_by_box(ws, cfg, validation, data, recs)
+
+    check("Txn by box: Box 6 20% sub-header rendered", ws.cell(row=15, column=1).value,
+          "20% (VAT on Income)")
+    check("Txn by box: Box 6 20% transaction row written", ws.cell(row=17, column=3).value, "INV1")
+    check("Txn by box: Box 6 domestic zero-rated sub-header rendered",
+          ws.cell(row=19, column=1).value, "Zero Rated Income")
+    check("Txn by box: Box 6 domestic zero-rated transaction row written",
+          ws.cell(row=21, column=3).value, "INV-0050")
+    check("Txn by box: Box 6 EC zero-rated sub-header rendered",
+          ws.cell(row=23, column=1).value, "Zero Rated EC Goods Income")
+    check("Txn by box: Box 6 EC zero-rated transaction row written",
+          ws.cell(row=25, column=3).value, "INV-0042")
+
+
+def test_txn_by_box_box4_box7_reverse_charge_and_exempt_render():
+    """Same gap as the Box 6 one above, on the expense side: Box 4/7's
+    sub-label lists previously only knew "20% (VAT on Expenses)", its
+    "- Adjusted" variant, and "5% (VAT on Expenses)" -- "Zero Rated
+    Expenses", "Exempt Expenses", "Reverse Charge Expenses (20%)" and its
+    "Reclaimed VAT" counterpart are all in _VAT_SUB_LABELS (so
+    TxnByBoxParser already parses them correctly whenever a Xero export
+    has one) but were silently dropped from this sheet. Confirms a
+    reverse-charge expense (e.g. imported digital services) now renders
+    under Box 4."""
+    builder = WorkbookBuilder()
+    cfg = _cfg()
+    validation = ValidationResult()
+    b4_rc = pd.DataFrame([{"Date": "10/02/2026", "Account": "Expenses", "Reference": "BILL-RC",
+                            "Details": "Imported digital service", "VAT": 50.0, "Net": 250.0}])
+    data = ParsedData(
+        boxes=_boxes(box4=50.0),
+        txn_sections={"Box 4|Reverse Charge Expenses (20%)": b4_rc},
+    )
+    recs = ReconciliationResults()
+
+    wb = Workbook()
+    ws = wb.active
+    builder._sheet_txn_by_box(ws, cfg, validation, data, recs)
+
+    check("Txn by box: Box 4 reverse-charge sub-header rendered",
+          ws.cell(row=13, column=1).value, "Reverse Charge Expenses (20%)")
+    check("Txn by box: Box 4 reverse-charge transaction row written",
+          ws.cell(row=15, column=3).value, "BILL-RC")
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # 2A. VAT Control: HMRC-payments table + closing reconciliation diff flag
 # ─────────────────────────────────────────────────────────────────────────
@@ -457,6 +531,8 @@ if __name__ == "__main__":
     test_checklist_all_items_rendered()
     test_txn_by_box_writes_totals_and_skips_empty_subsections()
     test_txn_by_box_box8_box9_render_via_dynamic_subsections()
+    test_txn_by_box_box6_domestic_zero_rated_renders_alongside_ec()
+    test_txn_by_box_box4_box7_reverse_charge_and_exempt_render()
     test_vat_control_hmrc_payments_table_and_diff_flag()
     test_bank_rec_balances_and_difference_shading()
     test_box6_rec_proof_of_output_vat_block()

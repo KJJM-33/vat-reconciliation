@@ -1,0 +1,20 @@
+{
+  "client_name": "Demo Company (UK) - box6_domestic_zero_rated",
+  "period_start": "01 Dec 2025",
+  "period_end": "28 Feb 2026",
+  "vat_scheme": "Cash",
+  "opening_vat_balance": 0.0,
+  "box1": 2598.24,
+  "box2": 0.0,
+  "box3": 2598.24,
+  "box4": 1279.31,
+  "box5": 1318.93,
+  "box6": 15986.0,
+  "box7": 6559.0,
+  "box8": 1995.0,
+  "box9": 0.0,
+  "hmrc_total": 0.0,
+  "vat_control_tb": -244.34,
+  "closing_vat_balance": 1318.93,
+  "vat_control_diff": 1563.27
+}

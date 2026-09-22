@@ -8,10 +8,10 @@ completed work. Branch: `claude/holiday-hardening`.
 
 | Item | Status |
 |---|---|
-| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15, 2026-09-20, 2026-09-21) — no failures found |
-| 2. Add edge-case coverage | In progress (2026-09-07 .. 2026-09-21) — see below for what's covered / still open |
+| 1. Run existing suite, fix genuine test bugs | Done (2026-09-07, re-checked 2026-09-08, 2026-09-09, 2026-09-13, 2026-09-14, 2026-09-15, 2026-09-20, 2026-09-21, 2026-09-22) — no failures found |
+| 2. Add edge-case coverage | In progress (2026-09-07 .. 2026-09-22) — see below for what's covered / still open |
 | 3. Respect CLAUDE.md Do-Not list | Followed for all code changes. **Found (not fixed) a Do-Not violation in app.py — see open questions below.** |
-| 4. Fix low-risk concrete bugs | 4 fixed: stale account-code comparison in `build_scenarios.py` (2026-09-08); Box 8/9 transactions silently dropped from the "Transactions by VAT Box" working paper sheet (2026-09-20, `vat_engine.py`); `cfg.tol_general` silently ignored by 4 of 5 `_flag()` diff-colouring calls in `WorkbookBuilder`/the CLI summary printer (2026-09-21, `vat_engine.py`); Session 7's own Box 8/9 regression test was defined but never wired into `test_workbook_builder.py`'s `__main__` run list, so it silently never executed (2026-09-21, `test_scenarios/test_workbook_builder.py`). See Session 8 below for detail |
+| 4. Fix low-risk concrete bugs | 7 fixed: stale account-code comparison in `build_scenarios.py` (2026-09-08); Box 8/9 transactions silently dropped from the "Transactions by VAT Box" working paper sheet (2026-09-20, `vat_engine.py`); `cfg.tol_general` silently ignored by 4 of 5 `_flag()` diff-colouring calls in `WorkbookBuilder`/the CLI summary printer (2026-09-21, `vat_engine.py`); Session 7's own Box 8/9 regression test was defined but never wired into `test_workbook_builder.py`'s `__main__` run list, so it silently never executed (2026-09-21, `test_scenarios/test_workbook_builder.py`); off-by-one in `build_scenarios.py`'s `scenario_dormant()`/`scenario_large_numbers()` excluding Box 9's row from the zero-out/scale loop (2026-09-22); domestic "Zero Rated Income" wrongly left in the VAT-proof "vatable" base in `_box6()` (2026-09-22, `vat_engine.py`); Box 6's domestic zero-rated and Box 4/7's zero-rated/exempt/reverse-charge sub-sections silently dropped from the "Transactions by VAT Box" sheet, same shape as the Box 8/9 bug (2026-09-22, `vat_engine.py`). See Session 9 below for detail |
 
 ## Open questions for Keyaan (do not act on these without his input)
 
@@ -900,6 +900,153 @@ directly per item 4 rather than logged as open questions.
   `test_*`-style functions, it's a linear script). No other orphaned test
   functions found; `test_workbook_builder.py` is now fully wired up too
   (confirmed after this session's fix).
+- No pytest-style tests still; left as-is per Session 1's reasoning.
+
+**Commits this session:** see git log on `claude/holiday-hardening`.
+
+---
+
+## Session 9 — 2026-09-22 (Tuesday)
+
+**Starting state:** picked up `claude/holiday-hardening` from Session 8
+(commit `65b3aa5`). `pip install -r requirements.txt` fresh (this container
+had no packages installed).
+
+**Ran (all green, no genuine failures — item 1):**
+- `test_scenarios/run_scenarios.py` — all 13 existing scenarios pass.
+- `test_scenarios/test_unit_helpers.py` — all checks pass.
+- `test_scenarios/test_annual_summary.py` — still OK.
+- `test_scenarios/test_annual_summary_edge_cases.py` — all 7 checks pass.
+- `test_scenarios/test_workbook_builder.py` — all 49 pre-existing checks
+  pass (before this session's additions).
+- `pytest` still not installed / no pytest-style tests anywhere — same
+  conclusion as every prior session, left as-is.
+
+**Found and fixed an off-by-one in `build_scenarios.py` (item 4):**
+`scenario_dormant()` and `scenario_large_numbers()` both looped
+`for r in range(15, 27)` over the VAT Return sheet's Box-value rows —
+Excel rows 15-27 hold Box 1 through Box 9 inclusive (confirmed by reading
+the actual cell labels: row 15 = "VAT due in the period on sales...",
+row 27 = "Total value of all acquisitions..."), but Python's `range(15,
+27)` stops at 26, excluding row 27 (Box 9) from both the dormant
+scenario's zero-out loop and the large-numbers scenario's x50 scale loop.
+**Currently invisible in practice**: the base demo file's Box 9 is already
+0, so "dormant" leaves it at 0 either way, and 0 × 50 = 0 for
+"large_numbers" — confirmed this by loading the base
+`demo_files/Demo-Company-UK-VAT-Return.xlsx` directly (Box 9 = 0, Box 8 =
+1995, i.e. Box 8 *was* correctly included in both loops since row 26 < 27
+falls inside `range(15,27)`; only Box 9's row 27 was missed). **Fixed**:
+changed both to `range(15, 28)`. Regenerated all fixtures and confirmed
+byte-for-byte that the change is a genuine no-op today (zero cell-value
+diffs between before/after for both scenarios) — this is a
+forward-looking correctness fix (protects against a future demo-data
+change giving Box 9 a non-zero value), not a fix for an observed wrong
+figure. Added a direct assertion in `run_scenarios.py`'s `dormant` case
+checking all of Box 1-9 (not just the 4 boxes `summary` exposes) come back
+as exactly `0.0`, reading `result.parsed.boxes` directly, so a future
+regression of this exact class fails loudly regardless of what the base
+demo file's Box 9 happens to be.
+
+**Found and fixed a more consequential bug while investigating the same
+row-range area — `_box6()`'s VAT proof only excluded EC-flavoured
+zero-rated income, not domestic zero-rated income, from "vatable" (item
+4):** `vat_engine.py`'s `_VAT_SUB_LABELS` whitelist (the fixed list of
+Box-6-sub-section labels `TxnByBoxParser` recognises) has always included
+both `"Zero Rated Income"` (domestic — most food, books, children's
+clothing) and `"Zero Rated EC Goods Income"` as distinct, separately
+parsed sub-sections. But `_box6()`'s VAT proof ("Box 6 × 20% ≈ Box 1")
+only ever excluded the EC one (`sec_zero = "Box 6|Zero Rated EC Goods
+Income"`) from the "vatable at 20%" base — any client with genuine
+domestic zero-rated sales (extremely common for UK SMEs — food, books,
+children's clothing all qualify) would have that income wrongly taxed at
+20% in this proof, inflating `expected_output_vat` and producing a
+persistent, incorrect red `vat_proof_diff` flag with nothing actually
+wrong. Confirmed the real demo file only exercises the EC-flavoured
+sub-section (no "Zero Rated Income" section in
+`demo_files/Demo-Company-UK-VAT-Return.xlsx`), so this was invisible in
+every existing scenario/test. **Fixed** (`vat_engine.py`, `_box6()`):
+sums `box6_zero_net` across *both* zero-rated sub-sections instead of
+just the EC one. Confirmed a no-op for all 13 existing scenarios (byte-
+identical `vat_proof_diff`).
+
+**Found the identical shape of bug (transactions silently dropped from
+the working-paper detail sheet) in `_sheet_txn_by_box`, on both the
+income and expense sides — same pattern Session 7 already fixed for
+Box 8/9 (item 4):** `_sheet_txn_by_box`'s hard-coded Box 6 sub-label list
+only rendered `"20% (VAT on Income)"` and `"Zero Rated EC Goods Income"`
+— missing `"Zero Rated Income"` (domestic), so a domestic zero-rated
+sale's supporting transaction detail would be silently dropped from the
+"1B. Transactions by VAT Box" sheet even though `TxnByBoxParser` parses
+it correctly. Box 4/Box 7's lists were missing 4 more labels each that
+`_VAT_SUB_LABELS` already whitelists: `"Zero Rated Expenses"`, `"Exempt
+Expenses"`, `"Reverse Charge Expenses (20%)"`, and `"Reverse Charge
+Expenses (20%) Reclaimed VAT"` — e.g. any reverse-charge expense (a very
+ordinary case: imported digital services, EU services under the reverse
+charge) would have its evidence missing from the one sheet meant to show
+it, exactly the same practical harm Session 7 flagged for Box 8/9.
+**Fixed**: added all 5 missing labels across Box 6/4/7's hard-coded lists
+(mirroring the existing hard-coded style for Boxes 1/4/6/7 — per Session
+7's own reasoning, these sub-labels are "known and stable", unlike Box
+8/9's client-varying ones, which correctly use the dynamic `_subs()`
+lookup instead). `_VAT_SUB_LABELS` and the rendered box lists are now
+fully in sync for every box. Confirmed a no-op for all 13 existing
+scenarios (byte-identical workbook output, only the "Generated" timestamp
+differs).
+
+**Added test coverage, all following the file's own established
+conventions:**
+- `test_scenarios/box6_domestic_zero_rated/` — new fixture + scenario
+  (`build_scenarios.py`, wired into `run_scenarios.py`): adds £1,000 of
+  domestic zero-rated income (a "Zero Rated Income" transaction
+  sub-section, distinct from the base demo's existing "Zero Rated EC
+  Goods Income" one) and increases Box 6 by the same £1,000.
+  `run_scenarios.py` asserts `vat_proof_diff` lands at the *same* -0.04 as
+  the unmodified base scenarios (proving the £1,000 is correctly excluded
+  from "vatable") rather than -0.04 + 200.00 = 199.96 (£1,000 × 20%,
+  which is what it would be if the domestic zero-rated bucket were still
+  wrongly taxed). **Verified this assertion genuinely catches the bug**:
+  temporarily `git stash`-ed the `_box6()` fix and re-ran — the assertion
+  failed with the predicted value (199.96) exactly, then restored the fix
+  and confirmed it passes again.
+- `test_scenarios/test_workbook_builder.py` — two new test functions:
+  `test_txn_by_box_box6_domestic_zero_rated_renders_alongside_ec` (all
+  three Box 6 sub-sections — 20%, domestic zero-rated, EC zero-rated —
+  render at their correct rows, each under its own label) and
+  `test_txn_by_box_box4_box7_reverse_charge_and_exempt_render` (a
+  reverse-charge expense transaction renders under Box 4). Both wired into
+  the file's `__main__` block (checked this carefully given Session 8's
+  finding that a previous new test was defined but never called).
+  **Verified both catch the regression**: `git stash`-ed the
+  `vat_engine.py` fix and confirmed both new tests fail with the exact
+  expected wrong values, then restored and confirmed clean.
+- Regenerated all fixtures after every change; confirmed via direct
+  cell-by-cell comparison (not just re-running the suite) that every
+  `.xlsx` outside the deliberately-changed scenarios is byte-identical in
+  content to before (only the "Generated" timestamp differs, the usual
+  openpyxl-resave metadata churn) before reverting those with `git
+  checkout --`. Final diff: `vat_engine.py`, `test_scenarios/build_scenarios.py`,
+  `test_scenarios/run_scenarios.py`, `test_scenarios/test_workbook_builder.py`,
+  the new `box6_domestic_zero_rated/` fixture directory, and this log.
+
+**No new "Open questions for Keyaan" this session** — all three findings
+above are mechanical: either a fixture-generator off-by-one with no live
+impact, or a case where the codebase's own `_VAT_SUB_LABELS` whitelist
+already proves the sub-label is a known, recognised category — the same
+category was already handled correctly for its EC/20%/5% siblings, just
+missing for these specific labels. None required a judgement call about
+VAT treatment, so fixed directly per item 4 rather than logged.
+
+**Still open for next session:**
+- The five standing "Open questions for Keyaan" (app.py logic placement,
+  `InputValidator` required-file severity, `AnnualSummaryBuilder` Q-label
+  positional numbering, File Register unconfigured-file red-flag, Box 2/
+  `_vat_control` gap) — still need Keyaan's input, don't act without them.
+- `_VAT_SUB_LABELS` / `_sheet_txn_by_box`'s hard-coded box lists are now
+  fully in sync for every box (1/4/6/7 hard-coded, 8/9 dynamic) — no
+  further gap of this shape found. Worth a fresh look elsewhere next
+  session; `ReconciliationEngine`'s aged-payables/receivables methods and
+  `AccountTxnParser` haven't had a dedicated audit pass the way
+  `WorkbookBuilder`, `VATReturnParser`, and `TxnByBoxParser` have.
 - No pytest-style tests still; left as-is per Session 1's reasoning.
 
 **Commits this session:** see git log on `claude/holiday-hardening`.

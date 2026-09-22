@@ -741,13 +741,18 @@ class ReconciliationEngine:
         """
         # QE sales from transactions sheet
         sec_key = "Box 6|20% (VAT on Income)"
-        sec_zero = "Box 6|Zero Rated EC Goods Income"
         box6_20  = data.txn_sections.get(sec_key, pd.DataFrame())
-        box6_z   = data.txn_sections.get(sec_zero, pd.DataFrame())
 
-        r.box6_zero_net = float(
-            pd.to_numeric(box6_z["Net"], errors="coerce").sum()
-        ) if not box6_z.empty else 0.0
+        # Zero-rated income isn't subject to the 20% rate this proof checks,
+        # whether it's EC goods or domestic zero-rated (e.g. most food, books,
+        # children's clothes) -- _VAT_SUB_LABELS already recognises both as
+        # distinct Box 6 sub-sections, so both must be excluded from "vatable"
+        # here, not just the EC one.
+        r.box6_zero_net = 0.0
+        for sec_zero in ("Box 6|Zero Rated EC Goods Income", "Box 6|Zero Rated Income"):
+            box6_z = data.txn_sections.get(sec_zero, pd.DataFrame())
+            if not box6_z.empty:
+                r.box6_zero_net += float(pd.to_numeric(box6_z["Net"], errors="coerce").sum())
 
         # TB totals (YTD)
         for code in cfg.sales_nominals:
@@ -1042,14 +1047,25 @@ class WorkbookBuilder:
             ("Box 4", "VAT reclaimed on purchases", b.box4, _GREEN,
              [("20% (VAT on Expenses)",          _get("Box 4", "20% (VAT on Expenses)")),
               ("20% (VAT on Expenses) - Adjusted", _get("Box 4", "20% (VAT on Expenses) - Adjusted")),
-              ("5% (VAT on Expenses)",            _get("Box 4", "5% (VAT on Expenses)"))]),
+              ("5% (VAT on Expenses)",            _get("Box 4", "5% (VAT on Expenses)")),
+              ("Zero Rated Expenses",             _get("Box 4", "Zero Rated Expenses")),
+              ("Exempt Expenses",                 _get("Box 4", "Exempt Expenses")),
+              ("Reverse Charge Expenses (20%)",   _get("Box 4", "Reverse Charge Expenses (20%)")),
+              ("Reverse Charge Expenses (20%) Reclaimed VAT",
+               _get("Box 4", "Reverse Charge Expenses (20%) Reclaimed VAT"))]),
             ("Box 6", "Net sales excluding VAT", b.box6, _BLUE,
              [("20% (VAT on Income)",       _get("Box 6", "20% (VAT on Income)")),
+              ("Zero Rated Income",         _get("Box 6", "Zero Rated Income")),
               ("Zero Rated EC Goods Income", _get("Box 6", "Zero Rated EC Goods Income"))]),
             ("Box 7", "Net purchases excluding VAT", b.box7, _GREEN,
              [("20% (VAT on Expenses)",          _get("Box 7", "20% (VAT on Expenses)")),
               ("20% (VAT on Expenses) - Adjusted", _get("Box 7", "20% (VAT on Expenses) - Adjusted")),
-              ("5% (VAT on Expenses)",            _get("Box 7", "5% (VAT on Expenses)"))]),
+              ("5% (VAT on Expenses)",            _get("Box 7", "5% (VAT on Expenses)")),
+              ("Zero Rated Expenses",             _get("Box 7", "Zero Rated Expenses")),
+              ("Exempt Expenses",                 _get("Box 7", "Exempt Expenses")),
+              ("Reverse Charge Expenses (20%)",   _get("Box 7", "Reverse Charge Expenses (20%)")),
+              ("Reverse Charge Expenses (20%) Reclaimed VAT",
+               _get("Box 7", "Reverse Charge Expenses (20%) Reclaimed VAT"))]),
             ("Box 8", "EU supplies (NI)", b.box8, _BLUE, _subs("Box 8")),
             ("Box 9", "EU acquisitions (NI)", b.box9, _GREEN, _subs("Box 9")),
         ]:
