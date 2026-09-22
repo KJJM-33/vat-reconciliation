@@ -14,7 +14,7 @@
   "box8": 1995.0,
   "box9": 0.0,
   "hmrc_total": 0.0,
-  "vat_control_tb": -244.34,
+  "vat_control_tb": 1000.0,
   "closing_vat_balance": -1000.0,
-  "vat_control_diff": -755.66
+  "vat_control_diff": -2000.0
 }
